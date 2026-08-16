@@ -1,0 +1,108 @@
+import numpy as np
+from sklearn.datasets import load_iris
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import silhouette_score
+
+# This is a minimal exploratory prototype, not the complete thesis BF or CBF algorithm.
+
+# Set the random generator with fixed seed for reproducibility
+rng = np.random.default_rng(42)
+
+# Load the Iris dataset
+iris = load_iris()
+X = iris.data  # Feature data (measurements)
+
+# Standardize the features
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Bacterial Foraging parameters
+num_clusters = 3
+population_size = 20
+num_iterations = 50
+step_size = 0.1
+
+# Get feature bounds for initialization
+feature_min = X_scaled.min(axis=0)
+feature_max = X_scaled.max(axis=0)
+feature_range = feature_max - feature_min
+
+
+def calculate_fitness(X, centers):
+    """
+    Calculate the sum of squared Euclidean distances
+    between every sample and its assigned cluster center.
+    """
+    distances = np.linalg.norm(
+        X[:, np.newaxis, :] - centers[np.newaxis, :, :],
+        axis=2,
+    )
+    labels = np.argmin(distances, axis=1)
+    fitness = np.sum((X - centers[labels]) ** 2)
+    return fitness, labels
+
+
+# Initialize bacteria (each bacterium is a set of cluster centers)
+# Each bacterium has shape (num_clusters, num_features)
+bacteria = rng.uniform(
+    low=feature_min,
+    high=feature_max,
+    size=(population_size, num_clusters, X_scaled.shape[1])
+)
+
+# Calculate initial fitness for all bacteria
+fitness_values = np.zeros(population_size)
+for i in range(population_size):
+    fitness_values[i], _ = calculate_fitness(X_scaled, bacteria[i])
+
+# Main iteration loop
+for iteration in range(1, num_iterations + 1):
+    # For each bacterium, attempt movement
+    for i in range(population_size):
+        # Create random direction
+        direction = rng.normal(size=bacteria[i].shape)
+        
+        # Normalize direction
+        direction_norm = np.linalg.norm(direction)
+        if direction_norm > 0:
+            direction = direction / direction_norm
+        
+        # Create candidate by moving in the random direction
+        candidate = bacteria[i] + step_size * direction
+        
+        # Calculate fitness for current bacterium and candidate
+        current_fitness = fitness_values[i]
+        candidate_fitness, _ = calculate_fitness(X_scaled, candidate)
+        
+        # Keep candidate if it has lower fitness (better)
+        if candidate_fitness < current_fitness:
+            bacteria[i] = candidate
+            fitness_values[i] = candidate_fitness
+    
+    # Identify best bacterium after this iteration
+    best_idx = np.argmin(fitness_values)
+    best_fitness = fitness_values[best_idx]
+    
+    # Print progress at specified iterations
+    if iteration in [1, 10, 20, 30, 40, 50]:
+        print(f"Iteration {iteration}: best fitness = {best_fitness:.4f}")
+
+# Get final best bacterium and its fitness
+best_idx = np.argmin(fitness_values)
+best_bacterium = bacteria[best_idx]
+best_fitness, best_labels = calculate_fitness(X_scaled, best_bacterium)
+
+# Calculate silhouette score
+silhouette = silhouette_score(X_scaled, best_labels)
+
+# Count samples in each cluster
+unique_labels, counts = np.unique(best_labels, return_counts=True)
+
+# Print final results
+print()
+print("Final BF Results:")
+print(f"Final BF fitness: {best_fitness:.4f}")
+print(f"Silhouette Score: {silhouette:.4f}")
+print("Cluster sample counts:")
+for label, count in zip(unique_labels, counts):
+    print(f"  Cluster {label}: {count} samples")
