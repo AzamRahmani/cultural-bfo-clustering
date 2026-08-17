@@ -4,6 +4,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
 
 # This is a minimal exploratory prototype, not the complete thesis BF or CBF algorithm.
+# This version implements simplified tumble-and-swim movement but does not yet include reproduction, elimination-dispersal, or cultural knowledge.
 
 # Set the random generator with fixed seed for reproducibility
 rng = np.random.default_rng(42)
@@ -21,6 +22,7 @@ num_clusters = 3
 population_size = 20
 num_iterations = 50
 step_size = 0.1
+max_swim_steps = 3  # This is a temporary prototype setting, not a verified thesis parameter.
 
 # Get feature bounds for initialization
 feature_min = X_scaled.min(axis=0)
@@ -55,34 +57,35 @@ fitness_values = np.zeros(population_size)
 for i in range(population_size):
     fitness_values[i], _ = calculate_fitness(X_scaled, bacteria[i])
 
+accepted_movements = 0
+
 # Main iteration loop
 for iteration in range(1, num_iterations + 1):
-    # For each bacterium, attempt movement
+    # For each bacterium, attempt tumble-and-swim movement
     for i in range(population_size):
-        # Create random direction
         direction = rng.normal(size=bacteria[i].shape)
-        
-        # Normalize direction
         direction_norm = np.linalg.norm(direction)
-        if direction_norm > 0:
-            direction = direction / direction_norm
-        
-        # Create candidate by moving in the random direction
-        candidate = bacteria[i] + step_size * direction
-        
-        # Calculate fitness for current bacterium and candidate
-        current_fitness = fitness_values[i]
-        candidate_fitness, _ = calculate_fitness(X_scaled, candidate)
-        
-        # Keep candidate if it has lower fitness (better)
-        if candidate_fitness < current_fitness:
-            bacteria[i] = candidate
-            fitness_values[i] = candidate_fitness
-    
+        if direction_norm == 0:
+            continue
+
+        direction = direction / direction_norm
+
+        for _ in range(max_swim_steps):
+            candidate = bacteria[i] + step_size * direction
+            candidate_fitness, _ = calculate_fitness(X_scaled, candidate)
+
+            if candidate_fitness < fitness_values[i]:
+                bacteria[i] = candidate
+                fitness_values[i] = candidate_fitness
+                accepted_movements += 1
+                continue
+
+            break
+
     # Identify best bacterium after this iteration
     best_idx = np.argmin(fitness_values)
     best_fitness = fitness_values[best_idx]
-    
+
     # Print progress at specified iterations
     if iteration in [1, 10, 20, 30, 40, 50]:
         print(f"Iteration {iteration}: best fitness = {best_fitness:.4f}")
@@ -106,3 +109,4 @@ print(f"Silhouette Score: {silhouette:.4f}")
 print("Cluster sample counts:")
 for label, count in zip(unique_labels, counts):
     print(f"  Cluster {label}: {count} samples")
+print(f"Total accepted movements: {accepted_movements}")
