@@ -4,8 +4,10 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
 
 # This is a minimal exploratory prototype, not the complete thesis BF or CBF algorithm.
-# This version implements simplified tumble-and-swim movement and reproduction.
-# It does not yet include elimination-dispersal, bacterial health accumulation, or cultural knowledge.
+# This version implements simplified tumble-and-swim,
+# reproduction, and elimination-dispersal.
+# It does not yet include bacterial health accumulation
+# or cultural knowledge.
 
 # Set the random generator with fixed seed for reproducibility
 rng = np.random.default_rng(42)
@@ -27,6 +29,12 @@ max_swim_steps = 3  # This is a temporary prototype setting, not a verified thes
 # These are temporary prototype settings, not verified thesis parameters.
 reproduction_interval = 10
 reproduction_events = 0
+elimination_interval = 10
+elimination_probability = 0.10
+elimination_events = 0
+dispersed_bacteria_count = 0
+# These elimination-dispersal settings are temporary prototype values,
+# not verified thesis parameters.
 
 # Get feature bounds for initialization
 feature_min = X_scaled.min(axis=0)
@@ -105,6 +113,26 @@ for iteration in range(1, num_iterations + 1):
 
         reproduction_events += 1
 
+    if iteration % elimination_interval == 0:
+        protected_best_index = np.argmin(fitness_values)
+        for i in range(population_size):
+            if i == protected_best_index:
+                continue
+
+            if rng.random() < elimination_probability:
+                bacteria[i] = rng.uniform(
+                    low=feature_min,
+                    high=feature_max,
+                    size=(num_clusters, X_scaled.shape[1]),
+                )
+                fitness_values[i], _ = calculate_fitness(
+                    X_scaled,
+                    bacteria[i],
+                )
+                dispersed_bacteria_count += 1
+
+        elimination_events += 1
+
     # Identify best bacterium after this iteration
     best_idx = np.argmin(fitness_values)
     best_fitness = fitness_values[best_idx]
@@ -134,4 +162,6 @@ for label, count in zip(unique_labels, counts):
     print(f"  Cluster {label}: {count} samples")
 print(f"Total accepted movements: {accepted_movements}")
 print(f"Reproduction events: {reproduction_events}")
+print(f"Elimination-dispersal events: {elimination_events}")
+print(f"Total dispersed bacteria: {dispersed_bacteria_count}")
 print(f"Final population size: {len(bacteria)}")
