@@ -4,7 +4,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
 
 # This is a minimal exploratory prototype, not the complete thesis BF or CBF algorithm.
-# This version implements simplified tumble-and-swim movement but does not yet include reproduction, elimination-dispersal, or cultural knowledge.
+# This version implements simplified tumble-and-swim movement and reproduction.
+# It does not yet include elimination-dispersal, bacterial health accumulation, or cultural knowledge.
 
 # Set the random generator with fixed seed for reproducibility
 rng = np.random.default_rng(42)
@@ -23,6 +24,9 @@ population_size = 20
 num_iterations = 50
 step_size = 0.1
 max_swim_steps = 3  # This is a temporary prototype setting, not a verified thesis parameter.
+# These are temporary prototype settings, not verified thesis parameters.
+reproduction_interval = 10
+reproduction_events = 0
 
 # Get feature bounds for initialization
 feature_min = X_scaled.min(axis=0)
@@ -82,6 +86,25 @@ for iteration in range(1, num_iterations + 1):
 
             break
 
+    if iteration % reproduction_interval == 0:
+        sorted_indices = np.argsort(fitness_values)
+        half_population = population_size // 2
+        best_indices = sorted_indices[:half_population]
+        best_bacteria = bacteria[best_indices].copy()
+        best_fitness_values = fitness_values[best_indices].copy()
+
+        bacteria = np.concatenate(
+            [best_bacteria, best_bacteria.copy()],
+            axis=0,
+        )
+
+        fitness_values = np.concatenate(
+            [best_fitness_values, best_fitness_values.copy()],
+            axis=0,
+        )
+
+        reproduction_events += 1
+
     # Identify best bacterium after this iteration
     best_idx = np.argmin(fitness_values)
     best_fitness = fitness_values[best_idx]
@@ -110,3 +133,5 @@ print("Cluster sample counts:")
 for label, count in zip(unique_labels, counts):
     print(f"  Cluster {label}: {count} samples")
 print(f"Total accepted movements: {accepted_movements}")
+print(f"Reproduction events: {reproduction_events}")
+print(f"Final population size: {len(bacteria)}")
