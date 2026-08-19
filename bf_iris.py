@@ -5,9 +5,8 @@ from sklearn.metrics import silhouette_score
 
 # This is a minimal exploratory prototype, not the complete thesis BF or CBF algorithm.
 # This version implements simplified tumble-and-swim,
-# reproduction, and elimination-dispersal.
-# It does not yet include bacterial health accumulation
-# or cultural knowledge.
+# bacterial health accumulation, reproduction, and elimination-dispersal.
+# It does not yet include cultural knowledge or the full thesis CBF method.
 
 # Set the random generator with fixed seed for reproducibility
 rng = np.random.default_rng(42)
@@ -33,6 +32,7 @@ elimination_interval = 10
 elimination_probability = 0.10
 elimination_events = 0
 dispersed_bacteria_count = 0
+health_accumulation_steps = 0
 # These elimination-dispersal settings are temporary prototype values,
 # not verified thesis parameters.
 
@@ -69,6 +69,9 @@ fitness_values = np.zeros(population_size)
 for i in range(population_size):
     fitness_values[i], _ = calculate_fitness(X_scaled, bacteria[i])
 
+# Health accumulates each bacterium's fitness across one reproduction interval.
+# Lower accumulated health is better because lower fitness is better.
+health_values = np.zeros(population_size)
 accepted_movements = 0
 
 # Main iteration loop
@@ -94,8 +97,11 @@ for iteration in range(1, num_iterations + 1):
 
             break
 
+    health_values += fitness_values
+    health_accumulation_steps += 1
+
     if iteration % reproduction_interval == 0:
-        sorted_indices = np.argsort(fitness_values)
+        sorted_indices = np.argsort(health_values)
         half_population = population_size // 2
         best_indices = sorted_indices[:half_population]
         best_bacteria = bacteria[best_indices].copy()
@@ -110,6 +116,8 @@ for iteration in range(1, num_iterations + 1):
             [best_fitness_values, best_fitness_values.copy()],
             axis=0,
         )
+        # Start a new health-accumulation period after reproduction.
+        health_values = np.zeros(population_size)
 
         reproduction_events += 1
 
@@ -161,6 +169,7 @@ print("Cluster sample counts:")
 for label, count in zip(unique_labels, counts):
     print(f"  Cluster {label}: {count} samples")
 print(f"Total accepted movements: {accepted_movements}")
+print(f"Health accumulation steps: {health_accumulation_steps}")
 print(f"Reproduction events: {reproduction_events}")
 print(f"Elimination-dispersal events: {elimination_events}")
 print(f"Total dispersed bacteria: {dispersed_bacteria_count}")
