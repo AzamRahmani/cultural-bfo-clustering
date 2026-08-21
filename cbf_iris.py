@@ -38,6 +38,11 @@ health_accumulation_steps = 0
 # not verified thesis parameters.
 cultural_influence = 0.05
 # Temporary prototype value, not a verified thesis parameter.
+acceptance_ratio = 0.35
+
+# Temporary acceptance ratio for the normative-knowledge prototype.
+# The value matches the verified thesis Paccept value, but this
+# simplified use is not confirmed as the exact thesis procedure.
 
 # Get feature bounds for initialization
 feature_min = X_scaled.min(axis=0)
@@ -79,6 +84,22 @@ belief_best_fitness = fitness_values[belief_best_index]
 belief_updates = 0
 cultural_movements = 0
 
+# Normative knowledge stores coordinate bounds learned from accepted better bacteria.
+accepted_count = max(
+    1,
+    int(np.ceil(population_size * acceptance_ratio)),
+)
+
+initial_accepted_indices = np.argsort(fitness_values)[:accepted_count]
+initial_accepted_bacteria = bacteria[initial_accepted_indices]
+
+normative_lower = initial_accepted_bacteria.min(axis=0)
+normative_upper = initial_accepted_bacteria.max(axis=0)
+
+normative_updates = 0
+normative_bounds_changes = 0
+normative_clipped_candidates = 0
+
 # Health accumulates each bacterium's fitness across one reproduction interval.
 # Lower accumulated health is better because lower fitness is better.
 health_values = np.zeros(population_size)
@@ -112,6 +133,14 @@ for iteration in range(1, num_iterations + 1):
 
         for _ in range(max_swim_steps):
             candidate = bacteria[i] + step_size * combined_direction
+            clipped_candidate = np.clip(
+                candidate,
+                normative_lower,
+                normative_upper,
+            )
+            if not np.array_equal(candidate, clipped_candidate):
+                normative_clipped_candidates += 1
+            candidate = clipped_candidate
             candidate_fitness, _ = calculate_fitness(X_scaled, candidate)
 
             if candidate_fitness < fitness_values[i]:
@@ -130,6 +159,21 @@ for iteration in range(1, num_iterations + 1):
         belief_best_bacterium = bacteria[current_best_index].copy()
         belief_best_fitness = current_best_fitness
         belief_updates += 1
+
+    # Update normative bounds from the better bacteria accepted this iteration.
+    accepted_indices = np.argsort(fitness_values)[:accepted_count]
+    accepted_bacteria = bacteria[accepted_indices]
+    new_normative_lower = accepted_bacteria.min(axis=0)
+    new_normative_upper = accepted_bacteria.max(axis=0)
+    bounds_changed = (
+        not np.array_equal(normative_lower, new_normative_lower)
+        or not np.array_equal(normative_upper, new_normative_upper)
+    )
+    if bounds_changed:
+        normative_bounds_changes += 1
+    normative_lower = new_normative_lower.copy()
+    normative_upper = new_normative_upper.copy()
+    normative_updates += 1
 
     health_values += fitness_values
     health_accumulation_steps += 1
@@ -211,6 +255,9 @@ print(f"Final population size: {len(bacteria)}")
 print(f"Belief-space best fitness: {belief_best_fitness:.4f}")
 print(f"Belief-space updates: {belief_updates}")
 print(f"Accepted culturally influenced movements: {cultural_movements}")
+print(f"Normative knowledge updates: {normative_updates}")
+print(f"Normative bounds changes: {normative_bounds_changes}")
+print(f"Normative clipped candidates: {normative_clipped_candidates}")
 
 belief_difference = abs(best_fitness - belief_best_fitness)
 print(f"Difference between final and belief best fitness: {belief_difference:.4f}")
