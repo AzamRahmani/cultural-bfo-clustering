@@ -2,3 +2,7 @@
 __pycache__/
 *.pyc
 original_thesis.pdf
+
+# Temporary NotebookLM source copies
+bf_iris.txt
+iris_baseline.txt
