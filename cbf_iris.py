@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 from sklearn.datasets import load_iris
 from sklearn.preprocessing import StandardScaler
@@ -9,8 +11,12 @@ from sklearn.metrics import silhouette_score
 # This version implements simplified tumble-and-swim,
 # bacterial health accumulation, reproduction, and elimination-dispersal.
 
-# Set the random generator with fixed seed for reproducibility
-rng = np.random.default_rng(42)
+# CLUSTER_SEED allows repeated experiments with different seeds.
+# The default remains 42 for backward-compatible reproducibility.
+random_seed = int(
+    os.environ.get("CLUSTER_SEED", "42")
+)
+rng = np.random.default_rng(random_seed)
 
 # Load the Iris dataset
 iris = load_iris()
@@ -241,6 +247,7 @@ unique_labels, counts = np.unique(best_labels, return_counts=True)
 # Print final results
 print()
 print("Final CBF Results:")
+print(f"Random seed: {random_seed}")
 print(f"Final CBF fitness: {best_fitness:.4f}")
 print(f"Silhouette Score: {silhouette:.4f}")
 print("Cluster sample counts:")

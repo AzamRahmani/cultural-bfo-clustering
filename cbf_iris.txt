@@ -1,21 +1,16 @@
-import os
-
 import numpy as np
 from sklearn.datasets import load_iris
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
 
-# This is a minimal exploratory prototype, not the complete thesis BF or CBF algorithm.
+# This is an exploratory Cultural-Bacterial Foraging prototype.
+# It extends the simplified BF implementation with situational knowledge.
+# It is not yet the complete Cultural Algorithm or thesis CBF method.
 # This version implements simplified tumble-and-swim,
 # bacterial health accumulation, reproduction, and elimination-dispersal.
-# It does not yet include cultural knowledge or the full thesis CBF method.
 
-# CLUSTER_SEED allows repeated experiments with different seeds.
-# The default remains 42 for backward-compatible reproducibility.
-random_seed = int(
-    os.environ.get("CLUSTER_SEED", "42")
-)
-rng = np.random.default_rng(random_seed)
+# Set the random generator with fixed seed for reproducibility
+rng = np.random.default_rng(42)
 
 # Load the Iris dataset
 iris = load_iris()
@@ -41,6 +36,13 @@ dispersed_bacteria_count = 0
 health_accumulation_steps = 0
 # These elimination-dispersal settings are temporary prototype values,
 # not verified thesis parameters.
+cultural_influence = 0.05
+# Temporary prototype value, not a verified thesis parameter.
+acceptance_ratio = 0.35
+
+# Temporary acceptance ratio for the normative-knowledge prototype.
+# The value matches the verified thesis Paccept value, but this
+# simplified use is not confirmed as the exact thesis procedure.
 
 # Get feature bounds for initialization
 feature_min = X_scaled.min(axis=0)
@@ -75,6 +77,29 @@ fitness_values = np.zeros(population_size)
 for i in range(population_size):
     fitness_values[i], _ = calculate_fitness(X_scaled, bacteria[i])
 
+# Situational knowledge stores the best bacterium found so far.
+belief_best_index = np.argmin(fitness_values)
+belief_best_bacterium = bacteria[belief_best_index].copy()
+belief_best_fitness = fitness_values[belief_best_index]
+belief_updates = 0
+cultural_movements = 0
+
+# Normative knowledge stores coordinate bounds learned from accepted better bacteria.
+accepted_count = max(
+    1,
+    int(np.ceil(population_size * acceptance_ratio)),
+)
+
+initial_accepted_indices = np.argsort(fitness_values)[:accepted_count]
+initial_accepted_bacteria = bacteria[initial_accepted_indices]
+
+normative_lower = initial_accepted_bacteria.min(axis=0)
+normative_upper = initial_accepted_bacteria.max(axis=0)
+
+normative_updates = 0
+normative_bounds_changes = 0
+normative_clipped_candidates = 0
+
 # Health accumulates each bacterium's fitness across one reproduction interval.
 # Lower accumulated health is better because lower fitness is better.
 health_values = np.zeros(population_size)
@@ -91,17 +116,64 @@ for iteration in range(1, num_iterations + 1):
 
         direction = direction / direction_norm
 
+        cultural_direction = belief_best_bacterium - bacteria[i]
+        cultural_direction_norm = np.linalg.norm(cultural_direction)
+        if cultural_direction_norm > 0:
+            cultural_direction = cultural_direction / cultural_direction_norm
+
+        combined_direction = (
+            direction
+            + cultural_influence * cultural_direction
+        )
+        combined_direction_norm = np.linalg.norm(combined_direction)
+        if combined_direction_norm == 0:
+            continue
+
+        combined_direction = combined_direction / combined_direction_norm
+
         for _ in range(max_swim_steps):
-            candidate = bacteria[i] + step_size * direction
+            candidate = bacteria[i] + step_size * combined_direction
+            clipped_candidate = np.clip(
+                candidate,
+                normative_lower,
+                normative_upper,
+            )
+            if not np.array_equal(candidate, clipped_candidate):
+                normative_clipped_candidates += 1
+            candidate = clipped_candidate
             candidate_fitness, _ = calculate_fitness(X_scaled, candidate)
 
             if candidate_fitness < fitness_values[i]:
                 bacteria[i] = candidate
                 fitness_values[i] = candidate_fitness
                 accepted_movements += 1
+                cultural_movements += 1
                 continue
 
             break
+
+    # Update situational belief knowledge before health accumulation.
+    current_best_index = np.argmin(fitness_values)
+    current_best_fitness = fitness_values[current_best_index]
+    if current_best_fitness < belief_best_fitness:
+        belief_best_bacterium = bacteria[current_best_index].copy()
+        belief_best_fitness = current_best_fitness
+        belief_updates += 1
+
+    # Update normative bounds from the better bacteria accepted this iteration.
+    accepted_indices = np.argsort(fitness_values)[:accepted_count]
+    accepted_bacteria = bacteria[accepted_indices]
+    new_normative_lower = accepted_bacteria.min(axis=0)
+    new_normative_upper = accepted_bacteria.max(axis=0)
+    bounds_changed = (
+        not np.array_equal(normative_lower, new_normative_lower)
+        or not np.array_equal(normative_upper, new_normative_upper)
+    )
+    if bounds_changed:
+        normative_bounds_changes += 1
+    normative_lower = new_normative_lower.copy()
+    normative_upper = new_normative_upper.copy()
+    normative_updates += 1
 
     health_values += fitness_values
     health_accumulation_steps += 1
@@ -168,9 +240,8 @@ unique_labels, counts = np.unique(best_labels, return_counts=True)
 
 # Print final results
 print()
-print("Final BF Results:")
-print(f"Random seed: {random_seed}")
-print(f"Final BF fitness: {best_fitness:.4f}")
+print("Final CBF Results:")
+print(f"Final CBF fitness: {best_fitness:.4f}")
 print(f"Silhouette Score: {silhouette:.4f}")
 print("Cluster sample counts:")
 for label, count in zip(unique_labels, counts):
@@ -181,3 +252,12 @@ print(f"Reproduction events: {reproduction_events}")
 print(f"Elimination-dispersal events: {elimination_events}")
 print(f"Total dispersed bacteria: {dispersed_bacteria_count}")
 print(f"Final population size: {len(bacteria)}")
+print(f"Belief-space best fitness: {belief_best_fitness:.4f}")
+print(f"Belief-space updates: {belief_updates}")
+print(f"Accepted culturally influenced movements: {cultural_movements}")
+print(f"Normative knowledge updates: {normative_updates}")
+print(f"Normative bounds changes: {normative_bounds_changes}")
+print(f"Normative clipped candidates: {normative_clipped_candidates}")
+
+belief_difference = abs(best_fitness - belief_best_fitness)
+print(f"Difference between final and belief best fitness: {belief_difference:.4f}")
