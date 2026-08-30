@@ -3,6 +3,11 @@ import re
 import subprocess
 import sys
 import numpy as np
+import matplotlib
+
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
 
 seeds = [0, 1, 2, 3, 4]
 
@@ -142,3 +147,70 @@ assert np.all(
     (-1 <= cbf_silhouette_values)
     & (cbf_silhouette_values <= 1)
 )
+
+fig, axes = plt.subplots(
+    1,
+    2,
+    figsize=(12, 5),
+)
+
+axes[0].plot(
+    seeds,
+    bf_fitness_values,
+    marker="o",
+    label="BF",
+)
+
+axes[0].plot(
+    seeds,
+    cbf_fitness_values,
+    marker="o",
+    label="CBF",
+)
+
+axes[0].set_title("Fitness Across Seeds (Lower Is Better)")
+axes[0].set_xlabel("Random Seed")
+axes[0].set_ylabel("Fitness")
+axes[0].set_xticks(seeds)
+axes[0].legend()
+axes[0].grid(alpha=0.3)
+
+axes[1].plot(
+    seeds,
+    bf_silhouette_values,
+    marker="o",
+    label="BF",
+)
+
+axes[1].plot(
+    seeds,
+    cbf_silhouette_values,
+    marker="o",
+    label="CBF",
+)
+
+axes[1].set_title("Silhouette Across Seeds (Higher Is Better)")
+axes[1].set_xlabel("Random Seed")
+axes[1].set_ylabel("Silhouette Score")
+axes[1].set_xticks(seeds)
+axes[1].set_ylim(0, 0.65)
+axes[1].legend()
+axes[1].grid(alpha=0.3)
+
+fig.suptitle(
+    "BF and CBF Results Across Five Iris Experiments"
+)
+
+plt.tight_layout()
+
+output_file = "seed_evaluation.png"
+
+plt.savefig(
+    output_file,
+    dpi=200,
+    bbox_inches="tight",
+)
+
+plt.close()
+
+print("Chart saved to: seed_evaluation.png")
