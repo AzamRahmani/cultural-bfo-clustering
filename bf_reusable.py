@@ -4,7 +4,11 @@ from data_loader import load_standardized_dataset
 from sklearn.metrics import silhouette_score
 
 
-def calculate_fitness(X_scaled, centers):
+def calculate_fitness(
+    X_scaled,
+    centers,
+    require_all_clusters=True,
+):
     distances = np.linalg.norm(
         X_scaled[:, np.newaxis, :]
         - centers[np.newaxis, :, :],
@@ -15,6 +19,16 @@ def calculate_fitness(X_scaled, centers):
         distances,
         axis=1,
     )
+
+    # Temporary prototype policy: reject solutions containing
+    # empty clusters. The exact thesis policy remains unverified.
+    if require_all_clusters:
+        nonempty_cluster_count = len(
+            np.unique(labels)
+        )
+
+        if nonempty_cluster_count < len(centers):
+            return np.inf, labels
 
     fitness = np.sum(
         (
@@ -85,12 +99,19 @@ def run_bf(
             bacteria[index],
         )
 
+    if not np.any(np.isfinite(fitness_values)):
+        raise RuntimeError(
+            "The initial population contains no valid "
+            "clustering solution."
+        )
+
     health_values = np.zeros(population_size)
     accepted_movements = 0
     health_accumulation_steps = 0
     reproduction_events = 0
     elimination_events = 0
     dispersed_bacteria_count = 0
+    empty_cluster_rejections = 0
 
     for iteration in range(1, num_iterations + 1):
         for index in range(population_size):
@@ -107,6 +128,10 @@ def run_bf(
                     X_scaled,
                     candidate,
                 )
+
+                if not np.isfinite(candidate_fitness):
+                    empty_cluster_rejections += 1
+                    break
 
                 if candidate_fitness < fitness_values[index]:
                     bacteria[index] = candidate
@@ -145,15 +170,33 @@ def run_bf(
                     continue
 
                 if rng.random() < elimination_probability:
-                    bacteria[index] = rng.uniform(
-                        low=feature_min,
-                        high=feature_max,
-                        size=(num_clusters, number_of_features),
-                    )
-                    fitness_values[index], _ = calculate_fitness(
-                        X_scaled,
-                        bacteria[index],
-                    )
+                    replacement_attempts = 0
+                    while replacement_attempts < 100:
+                        replacement_attempts += 1
+                        replacement = rng.uniform(
+                            low=feature_min,
+                            high=feature_max,
+                            size=(num_clusters, number_of_features),
+                        )
+                        replacement_fitness, _ = (
+                            calculate_fitness(
+                                X_scaled,
+                                replacement,
+                            )
+                        )
+                        if np.isfinite(replacement_fitness):
+                            bacteria[index] = replacement
+                            fitness_values[index] = (
+                                replacement_fitness
+                            )
+                            break
+
+                        empty_cluster_rejections += 1
+                    else:
+                        raise RuntimeError(
+                            "Could not generate a valid dispersed "
+                            "bacterium."
+                        )
                     dispersed_bacteria_count += 1
 
             elimination_events += 1
@@ -179,6 +222,9 @@ def run_bf(
         "reproduction_events": reproduction_events,
         "elimination_events": elimination_events,
         "dispersed_bacteria_count": dispersed_bacteria_count,
+        "empty_cluster_rejections": (
+            empty_cluster_rejections
+        ),
         "random_seed": random_seed,
     }
 
@@ -202,6 +248,10 @@ def print_result(dataset_name, result):
         "Dispersed bacteria count: "
         f"{result['dispersed_bacteria_count']}"
     )
+    print(
+        "Empty-cluster rejections: "
+        f"{result['empty_cluster_rejections']}"
+    )
     print()
 
 
@@ -223,6 +273,10 @@ if __name__ == "__main__":
     assert iris_result["population"].shape == (20, 3, 4)
     assert len(np.unique(iris_result["labels"])) == 3
     assert np.isfinite(iris_result["best_fitness"])
+    assert np.all(
+        np.isfinite(iris_result["fitness_values"])
+    )
+    assert iris_result["empty_cluster_rejections"] >= 0
     assert -1 <= iris_result["silhouette"] <= 1
     assert iris_result["health_accumulation_steps"] == 50
     assert iris_result["reproduction_events"] == 5
@@ -245,6 +299,10 @@ if __name__ == "__main__":
     assert wine_result["population"].shape == (20, 3, 13)
     assert len(np.unique(wine_result["labels"])) == 3
     assert np.isfinite(wine_result["best_fitness"])
+    assert np.all(
+        np.isfinite(wine_result["fitness_values"])
+    )
+    assert wine_result["empty_cluster_rejections"] >= 0
     assert -1 <= wine_result["silhouette"] <= 1
     assert wine_result["health_accumulation_steps"] == 50
     assert wine_result["reproduction_events"] == 5

@@ -20,8 +20,6 @@ bf_fitness_values = []
 bf_silhouette_values = []
 cbf_fitness_values = []
 cbf_silhouette_values = []
-bf_cluster_counts = []
-cbf_cluster_counts = []
 
 for seed in seeds:
     bf_result = run_bf(
@@ -34,20 +32,6 @@ for seed in seeds:
         X_scaled,
         num_clusters=3,
         random_seed=seed,
-    )
-
-    bf_cluster_count = len(
-        np.unique(bf_result["labels"])
-    )
-    cbf_cluster_count = len(
-        np.unique(cbf_result["labels"])
-    )
-
-    bf_cluster_counts.append(
-        bf_cluster_count
-    )
-    cbf_cluster_counts.append(
-        cbf_cluster_count
     )
 
     bf_fitness_values.append(
@@ -70,7 +54,7 @@ for seed in seeds:
         3,
         13,
     )
-    assert 2 <= bf_cluster_count <= 3
+    assert len(np.unique(bf_result["labels"])) == 3
     assert np.isfinite(
         bf_result["best_fitness"]
     )
@@ -84,7 +68,7 @@ for seed in seeds:
         3,
         13,
     )
-    assert 2 <= cbf_cluster_count <= 3
+    assert len(np.unique(cbf_result["labels"])) == 3
     assert np.isfinite(
         cbf_result["best_fitness"]
     )
@@ -112,10 +96,6 @@ for seed in seeds:
         f"{bf_result['silhouette']:.4f}"
     )
     print(
-        f"BF resulting clusters: "
-        f"{bf_cluster_count}"
-    )
-    print(
         f"CBF archived fitness: "
         f"{cbf_result['best_fitness']:.4f}"
     )
@@ -126,10 +106,6 @@ for seed in seeds:
     print(
         f"CBF silhouette: "
         f"{cbf_result['silhouette']:.4f}"
-    )
-    print(
-        f"CBF resulting clusters: "
-        f"{cbf_cluster_count}"
     )
     print()
 
@@ -147,22 +123,6 @@ cbf_fitness_values = np.array(
 
 cbf_silhouette_values = np.array(
     cbf_silhouette_values
-)
-
-bf_cluster_counts = np.array(
-    bf_cluster_counts
-)
-
-cbf_cluster_counts = np.array(
-    cbf_cluster_counts
-)
-
-bf_three_cluster_runs = int(
-    np.sum(bf_cluster_counts == 3)
-)
-
-cbf_three_cluster_runs = int(
-    np.sum(cbf_cluster_counts == 3)
 )
 
 bf_mean_fitness = np.mean(
@@ -237,18 +197,6 @@ assert len(bf_fitness_values) == 5
 assert len(cbf_fitness_values) == 5
 assert len(bf_silhouette_values) == 5
 assert len(cbf_silhouette_values) == 5
-assert len(bf_cluster_counts) == 5
-assert len(cbf_cluster_counts) == 5
-
-assert np.all(
-    (2 <= bf_cluster_counts)
-    & (bf_cluster_counts <= 3)
-)
-
-assert np.all(
-    (2 <= cbf_cluster_counts)
-    & (cbf_cluster_counts <= 3)
-)
 
 assert np.all(
     np.isfinite(bf_fitness_values)
@@ -342,14 +290,6 @@ print(
     f"CBF higher-silhouette wins: "
     f"{cbf_silhouette_wins} of 5"
 )
-print(
-    f"BF runs with three nonempty clusters: "
-    f"{bf_three_cluster_runs} of 5"
-)
-print(
-    f"CBF runs with three nonempty clusters: "
-    f"{cbf_three_cluster_runs} of 5"
-)
 
 print()
 print("Important notes:")
@@ -374,10 +314,6 @@ print(
 print(
     "- The complete thesis CBF method "
     "has not been reproduced."
-)
-print(
-    "- A requested cluster centre can be empty; "
-    "actual nonempty cluster counts are reported."
 )
 
 fig, axes = plt.subplots(
