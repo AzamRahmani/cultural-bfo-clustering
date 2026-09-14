@@ -1,4 +1,4 @@
-from sklearn.datasets import load_iris, load_wine
+from sklearn.datasets import fetch_openml, load_iris, load_wine
 from sklearn.preprocessing import StandardScaler
 
 
@@ -19,15 +19,25 @@ def load_standardized_dataset(dataset_name):
         dataset = load_iris()
     elif normalized_name == "wine":
         dataset = load_wine()
+    elif normalized_name == "glass":
+        dataset = fetch_openml(
+            name="glass",
+            version=1,
+            as_frame=False,
+            parser="liac-arff",
+        )
     else:
         raise ValueError(
-            "Unsupported dataset. Choose 'iris' or 'wine'."
+            "Unsupported dataset. Choose 'iris', 'wine', or 'glass'."
         )
 
     X = dataset.data
     y = dataset.target
     feature_names = list(dataset.feature_names)
-    class_names = list(dataset.target_names)
+    if normalized_name == "glass":
+        class_names = sorted(set(y.tolist()))
+    else:
+        class_names = list(dataset.target_names)
 
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
@@ -45,9 +55,10 @@ if __name__ == "__main__":
     expected_shapes = {
         "iris": ((150, 4), (150,), 4),
         "wine": ((178, 13), (178,), 13),
+        "glass": ((214, 9), (214,), 9),
     }
 
-    for dataset_name in ["iris", "wine"]:
+    for dataset_name in ["iris", "wine", "glass"]:
         X, y, X_scaled, feature_names, class_names = (
             load_standardized_dataset(dataset_name)
         )
@@ -59,7 +70,8 @@ if __name__ == "__main__":
         assert y.shape == expected_y_shape
         assert X_scaled.shape == expected_X_shape
         assert len(feature_names) == expected_feature_count
-        assert len(class_names) == 3
+        expected_class_count = 6 if dataset_name == "glass" else 3
+        assert len(class_names) == expected_class_count
         assert abs(X_scaled.mean()) < 1e-10
 
         print(f"Dataset: {dataset_name.capitalize()}")
