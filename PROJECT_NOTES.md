@@ -50,3 +50,13 @@ This does not match the thesis dataset.
 - Verify exact thesis preprocessing.
 - Verify missing-value handling from the thesis.
 - Verify thesis Cancer benchmark results.
+
+## Literature Review
+
+### Critical Review of Bio-Inspired Algorithms
+
+Main lessons:
+- Novel biological terminology does not automatically mean algorithmic novelty.
+- Claims require strong baselines and repeated experiments.
+- Scalability, convergence, reliability, and interpretability must be evaluated.
+- Improvements should be separated from reproduction.
