@@ -4,6 +4,11 @@ from contextlib import redirect_stdout
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 
+from clustering_metrics import (
+    within_cluster_sum_euclidean_distance,
+    within_cluster_sum_squared_distance,
+)
+
 
 with redirect_stdout(io.StringIO()):
     import iris_baseline
@@ -85,6 +90,73 @@ def manual_inertia(X_scaled, labels, centers):
         ((sample - centers[labels[index]]) ** 2).sum()
         for index, sample in enumerate(X_scaled)
     )
+
+
+metric_X = np.array([[0.0, 0.0], [3.0, 4.0]])
+metric_labels = np.array([0, 0])
+metric_centers = np.array([[0.0, 0.0]])
+assert within_cluster_sum_euclidean_distance(
+    metric_X, metric_labels, metric_centers
+) == 5.0
+assert within_cluster_sum_squared_distance(
+    metric_X, metric_labels, metric_centers
+) == 25.0
+
+multi_cluster_X = np.array([[1.0, 0.0], [9.0, 0.0], [3.0, 4.0]])
+multi_cluster_labels = np.array([0, 1, 0])
+multi_cluster_centers = np.array([[0.0, 0.0], [10.0, 0.0]])
+assert within_cluster_sum_euclidean_distance(
+    multi_cluster_X, multi_cluster_labels, multi_cluster_centers
+) == 7.0
+assert within_cluster_sum_squared_distance(
+    multi_cluster_X, multi_cluster_labels, multi_cluster_centers
+) == 27.0
+
+
+def assert_metric_value_error(function, X, labels, centers, expected_message):
+    try:
+        function(X, labels, centers)
+    except ValueError as error:
+        assert expected_message in str(error)
+    else:
+        raise AssertionError("Expected metric input validation to fail.")
+
+
+assert_metric_value_error(
+    within_cluster_sum_squared_distance,
+    [[0.0, 0.0], [1.0, 1.0]],
+    [0],
+    [[0.0, 0.0]],
+    "same number of samples",
+)
+assert_metric_value_error(
+    within_cluster_sum_squared_distance,
+    [[0.0, 0.0]],
+    [0],
+    [[0.0, 0.0, 0.0]],
+    "same number of features",
+)
+assert_metric_value_error(
+    within_cluster_sum_squared_distance,
+    [[0.0, 0.0]],
+    [1],
+    [[0.0, 0.0]],
+    "valid center indices",
+)
+assert_metric_value_error(
+    within_cluster_sum_euclidean_distance,
+    [[np.inf, 0.0]],
+    [0],
+    [[0.0, 0.0]],
+    "finite real numeric values",
+)
+assert_metric_value_error(
+    within_cluster_sum_squared_distance,
+    [[0.0, 0.0]],
+    [0.0],
+    [[0.0, 0.0]],
+    "integer cluster identifiers",
+)
 
 
 assert iris_baseline.X.shape == (150, 4)
