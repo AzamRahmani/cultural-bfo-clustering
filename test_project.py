@@ -8,6 +8,7 @@ from clustering_metrics import (
     within_cluster_sum_euclidean_distance,
     within_cluster_sum_squared_distance,
 )
+from bacterial_interaction import bacterial_interaction
 
 
 with redirect_stdout(io.StringIO()):
@@ -111,6 +112,88 @@ assert within_cluster_sum_euclidean_distance(
 assert within_cluster_sum_squared_distance(
     multi_cluster_X, multi_cluster_labels, multi_cluster_centers
 ) == 27.0
+
+bacterial_candidate = np.array([0.0, 0.0])
+bacterial_population = np.array(
+    [[0.0, 0.0], [1.0, 0.0], [0.0, 0.0]]
+)
+bacterial_parameters = (2.0, 0.5, 3.0, 1.0)
+zero_distance_interaction = -2.0 + 3.0
+unit_distance_interaction = (
+    -2.0 * np.exp(-0.5)
+    + 3.0 * np.exp(-1.0)
+)
+assert np.isclose(
+    bacterial_interaction(
+        bacterial_candidate,
+        bacterial_population,
+        *bacterial_parameters,
+    ),
+    2 * zero_distance_interaction + unit_distance_interaction,
+)
+assert np.isclose(
+    bacterial_interaction(
+        bacterial_candidate,
+        bacterial_population,
+        *bacterial_parameters,
+        include_self=False,
+        self_index=0,
+    ),
+    zero_distance_interaction + unit_distance_interaction,
+)
+
+
+def assert_bacterial_interaction_value_error(
+    candidate,
+    population,
+    expected_message,
+    include_self=True,
+    self_index=None,
+):
+    try:
+        bacterial_interaction(
+            candidate,
+            population,
+            *bacterial_parameters,
+            include_self=include_self,
+            self_index=self_index,
+        )
+    except ValueError as error:
+        assert expected_message in str(error)
+    else:
+        raise AssertionError(
+            "Expected bacterial interaction input validation to fail."
+        )
+
+
+assert_bacterial_interaction_value_error(
+    [[0.0, 0.0]],
+    bacterial_population,
+    "candidate must have shape",
+)
+assert_bacterial_interaction_value_error(
+    bacterial_candidate,
+    [0.0, 0.0],
+    "population must have shape",
+)
+assert_bacterial_interaction_value_error(
+    bacterial_candidate,
+    [[0.0, 0.0, 0.0]],
+    "same number of dimensions",
+)
+assert_bacterial_interaction_value_error(
+    bacterial_candidate,
+    bacterial_population,
+    "self_index is required",
+    include_self=False,
+)
+assert_bacterial_interaction_value_error(
+    bacterial_candidate,
+    bacterial_population,
+    "identify a row",
+    include_self=False,
+    self_index=3,
+)
 
 
 def assert_metric_value_error(function, X, labels, centers, expected_message):
