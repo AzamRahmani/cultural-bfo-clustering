@@ -1,4 +1,5 @@
 import numpy as np
+import time
 
 from data_loader import load_standardized_dataset
 from sklearn.metrics import silhouette_score
@@ -80,6 +81,7 @@ def run_bf(
             "population_size must be at least 2."
         )
 
+    runtime_start = time.perf_counter()
     rng = np.random.default_rng(random_seed)
 
     feature_min = X_scaled.min(axis=0)
@@ -93,7 +95,10 @@ def run_bf(
     )
 
     fitness_values = np.zeros(population_size)
+    fitness_evaluation_count = 0
     for index in range(population_size):
+        # Count one evaluation for each candidate passed to calculate_fitness.
+        fitness_evaluation_count += 1
         fitness_values[index], _ = calculate_fitness(
             X_scaled,
             bacteria[index],
@@ -124,6 +129,8 @@ def run_bf(
 
             for _ in range(max_swim_steps):
                 candidate = bacteria[index] + step_size * direction
+                # Count each attempted candidate, including invalid candidates.
+                fitness_evaluation_count += 1
                 candidate_fitness, _ = calculate_fitness(
                     X_scaled,
                     candidate,
@@ -178,6 +185,8 @@ def run_bf(
                             high=feature_max,
                             size=(num_clusters, number_of_features),
                         )
+                        # Count each replacement candidate before validity is known.
+                        fitness_evaluation_count += 1
                         replacement_fitness, _ = (
                             calculate_fitness(
                                 X_scaled,
@@ -203,15 +212,20 @@ def run_bf(
 
     best_index = np.argmin(fitness_values)
     best_bacterium = bacteria[best_index]
+    # Count the final returned candidate's fitness calculation.
+    fitness_evaluation_count += 1
     best_fitness, best_labels = calculate_fitness(
         X_scaled,
         best_bacterium,
     )
     silhouette = silhouette_score(X_scaled, best_labels)
+    runtime_seconds = time.perf_counter() - runtime_start
 
     return {
         "best_fitness": float(best_fitness),
         "silhouette": float(silhouette),
+        "runtime_seconds": float(runtime_seconds),
+        "fitness_evaluation_count": fitness_evaluation_count,
         "labels": best_labels,
         "centers": best_bacterium,
         "population": bacteria,

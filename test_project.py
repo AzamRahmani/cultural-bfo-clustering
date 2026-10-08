@@ -94,6 +94,108 @@ def manual_inertia(X_scaled, labels, centers):
     )
 
 
+def assert_runtime_and_evaluation_count(result):
+    assert "runtime_seconds" in result
+    assert isinstance(result["runtime_seconds"], float)
+    assert np.isfinite(result["runtime_seconds"])
+    assert result["runtime_seconds"] >= 0
+    assert "fitness_evaluation_count" in result
+    assert isinstance(result["fitness_evaluation_count"], int)
+    assert result["fitness_evaluation_count"] > 0
+
+
+def assert_same_seed_results(first, second, event_counter_names):
+    assert (
+        first["fitness_evaluation_count"]
+        == second["fitness_evaluation_count"]
+    )
+    assert np.isclose(
+        first["best_fitness"],
+        second["best_fitness"],
+        rtol=0,
+        atol=1e-12,
+    )
+    assert np.array_equal(first["labels"], second["labels"])
+    assert np.array_equal(first["centers"], second["centers"])
+    for counter_name in event_counter_names:
+        assert first[counter_name] == second[counter_name]
+
+
+for dataset_name, algorithm_name, reusable_result in (
+    ("Iris", "BF", reusable_iris_bf),
+    ("Iris", "CBF", reusable_iris_cbf),
+    ("Wine", "BF", reusable_wine_bf),
+    ("Wine", "CBF", reusable_wine_cbf),
+    ("Glass", "BF", glass_bf),
+    ("Glass", "CBF", glass_cbf),
+    ("Cancer", "BF", cancer_bf),
+    ("Cancer", "CBF", cancer_cbf),
+):
+    assert_runtime_and_evaluation_count(reusable_result)
+    print(
+        f"{dataset_name} {algorithm_name}: "
+        "fitness_evaluation_count="
+        f"{reusable_result['fitness_evaluation_count']}, "
+        "runtime_seconds (environment-dependent)="
+        f"{reusable_result['runtime_seconds']:.9f}"
+    )
+
+
+same_seed_parameters = {
+    "num_clusters": 3,
+    "random_seed": 1729,
+    "num_iterations": 3,
+    "reproduction_interval": 1,
+    "elimination_interval": 1,
+}
+same_seed_bf_first = run_bf(
+    reusable_iris_scaled,
+    **same_seed_parameters,
+)
+same_seed_bf_second = run_bf(
+    reusable_iris_scaled,
+    **same_seed_parameters,
+)
+same_seed_cbf_first = run_cbf(
+    reusable_iris_scaled,
+    **same_seed_parameters,
+)
+same_seed_cbf_second = run_cbf(
+    reusable_iris_scaled,
+    **same_seed_parameters,
+)
+
+assert_same_seed_results(
+    same_seed_bf_first,
+    same_seed_bf_second,
+    (
+        "accepted_movements",
+        "health_accumulation_steps",
+        "reproduction_events",
+        "elimination_events",
+        "dispersed_bacteria_count",
+        "empty_cluster_rejections",
+    ),
+)
+assert_same_seed_results(
+    same_seed_cbf_first,
+    same_seed_cbf_second,
+    (
+        "accepted_movements",
+        "cultural_movements",
+        "belief_updates",
+        "normative_updates",
+        "normative_bounds_changes",
+        "normative_clipped_candidates",
+        "health_accumulation_steps",
+        "reproduction_events",
+        "elimination_events",
+        "dispersed_bacteria_count",
+        "empty_cluster_rejections",
+    ),
+)
+
+
 metric_X = np.array([[0.0, 0.0], [3.0, 4.0]])
 metric_labels = np.array([0, 0])
 metric_centers = np.array([[0.0, 0.0]])
