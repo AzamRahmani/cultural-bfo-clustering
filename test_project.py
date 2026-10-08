@@ -8,6 +8,7 @@ from clustering_metrics import (
     within_cluster_sum_euclidean_distance,
     within_cluster_sum_squared_distance,
 )
+from clustering_evaluation import clustering_error_rate
 from bacterial_interaction import bacterial_interaction
 
 
@@ -239,6 +240,91 @@ assert_metric_value_error(
     [0.0],
     [[0.0, 0.0]],
     "integer cluster identifiers",
+)
+
+
+def assert_clustering_evaluation_value_error(
+    y_true,
+    cluster_labels,
+    expected_message,
+):
+    try:
+        clustering_error_rate(y_true, cluster_labels)
+    except ValueError as error:
+        assert expected_message in str(error)
+    else:
+        raise AssertionError(
+            "Expected clustering evaluation input validation to fail."
+        )
+
+
+swapped_evaluation = clustering_error_rate(
+    [0, 0, 1, 1],
+    [1, 1, 0, 0],
+)
+assert swapped_evaluation["mapping"] == {1: 0, 0: 1}
+assert swapped_evaluation["correct_count"] == 4
+assert swapped_evaluation["incorrect_count"] == 0
+assert swapped_evaluation["accuracy_percent"] == 100.0
+assert swapped_evaluation["error_rate_percent"] == 0.0
+assert np.array_equal(
+    swapped_evaluation["contingency_matrix"],
+    np.array([[0, 2], [2, 0]]),
+)
+
+partial_evaluation = clustering_error_rate(
+    [0, 0, 1, 1],
+    [1, 0, 0, 0],
+)
+assert partial_evaluation["correct_count"] == 3
+assert partial_evaluation["incorrect_count"] == 1
+assert partial_evaluation["accuracy_percent"] == 75.0
+assert partial_evaluation["error_rate_percent"] == 25.0
+
+arbitrary_identifier_evaluation = clustering_error_rate(
+    [2, 2, 4, 4],
+    [20, 20, 10, 10],
+)
+assert arbitrary_identifier_evaluation["mapping"] == {
+    20: 2,
+    10: 4,
+}
+assert arbitrary_identifier_evaluation["accuracy_percent"] == 100.0
+
+assert_clustering_evaluation_value_error(
+    [0, 1],
+    [0],
+    "same number of samples",
+)
+assert_clustering_evaluation_value_error(
+    [[0, 1]],
+    [0, 1],
+    "one-dimensional array",
+)
+assert_clustering_evaluation_value_error(
+    [0, 1],
+    [[0, 1]],
+    "one-dimensional array",
+)
+assert_clustering_evaluation_value_error(
+    [],
+    [],
+    "At least one sample",
+)
+assert_clustering_evaluation_value_error(
+    [0, 0, 1],
+    [10, 20, 30],
+    "number of predicted clusters",
+)
+assert_clustering_evaluation_value_error(
+    [0.0, np.nan, 1.0],
+    [10, 20, 20],
+    "missing or non-finite",
+)
+assert_clustering_evaluation_value_error(
+    [0, 1, 1],
+    [10.0, np.inf, 20.0],
+    "missing or non-finite",
 )
 
 
