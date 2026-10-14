@@ -1,6 +1,10 @@
+import csv
 import io
-import numpy as np
+import tempfile
 from contextlib import redirect_stdout
+from pathlib import Path
+
+import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 
@@ -10,6 +14,11 @@ from clustering_metrics import (
 )
 from clustering_evaluation import clustering_error_rate
 from bacterial_interaction import bacterial_interaction
+from experiment_results import (
+    EXPERIMENT_RESULT_COLUMNS,
+    read_experiment_results,
+    write_experiment_results,
+)
 
 
 with redirect_stdout(io.StringIO()):
@@ -833,3 +842,250 @@ print(f"K-Means fitness: {iris_baseline.inertia:.4f}")
 print(f"BF fitness: {bf_iris.best_fitness:.4f}")
 print(f"CBF fitness: {cbf_iris.best_fitness:.4f}")
 print("All methods produced three nonempty clusters.")
+
+
+def make_experiment_result_row(seed=7, parameter_configuration=None):
+    if parameter_configuration is None:
+        parameter_configuration = {"step_size": 0.1, "num_clusters": 3}
+    return {
+        "dataset": "Iris",
+        "algorithm": "BF",
+        "seed": seed,
+        "best_fitness": 12.5,
+        "final_population_best_fitness": 13.0,
+        "silhouette": 0.72,
+        "error_rate_percent": 4.0,
+        "accuracy_percent": 96.0,
+        "correct_count": 144,
+        "incorrect_count": 6,
+        "nonempty_cluster_count": 3,
+        "empty_cluster_rejections": 2,
+        "runtime_seconds": 1.25,
+        "fitness_evaluation_count": 80,
+        "accepted_movements": 11,
+        "reproduction_events": 5,
+        "elimination_events": 5,
+        "dispersed_bacteria_count": 2,
+        "run_status": "success",
+        "failure_description": "",
+        "parameter_configuration": parameter_configuration,
+        "git_commit": "abc123",
+        "python_version": "3.12.0",
+        "numpy_version": "2.0.0",
+        "sklearn_version": "1.5.0",
+        "scipy_version": "1.14.0",
+        "matplotlib_version": "3.9.0",
+    }
+
+
+def assert_experiment_results_value_error(action):
+    try:
+        action()
+    except ValueError:
+        return
+    raise AssertionError("Expected experiment results validation to fail.")
+
+
+with tempfile.TemporaryDirectory() as temporary_directory:
+    temporary_root = Path(temporary_directory)
+    output_path = temporary_root / "nested" / "results.csv"
+    expected_experiment_columns = (
+        "dataset",
+        "algorithm",
+        "seed",
+        "best_fitness",
+        "final_population_best_fitness",
+        "silhouette",
+        "error_rate_percent",
+        "accuracy_percent",
+        "correct_count",
+        "incorrect_count",
+        "nonempty_cluster_count",
+        "empty_cluster_rejections",
+        "runtime_seconds",
+        "fitness_evaluation_count",
+        "accepted_movements",
+        "reproduction_events",
+        "elimination_events",
+        "dispersed_bacteria_count",
+        "run_status",
+        "failure_description",
+        "parameter_configuration",
+        "git_commit",
+        "python_version",
+        "numpy_version",
+        "sklearn_version",
+        "scipy_version",
+        "matplotlib_version",
+    )
+    assert EXPERIMENT_RESULT_COLUMNS == expected_experiment_columns
+
+    first_configuration = {
+        "step_size": 0.1,
+        "limits": {"upper": 5, "lower": -5},
+    }
+    second_configuration = {
+        "limits": {"lower": -5, "upper": 5},
+        "step_size": 0.1,
+    }
+    experiment_rows = [
+        make_experiment_result_row(7, first_configuration),
+        make_experiment_result_row(8, second_configuration),
+    ]
+
+    write_experiment_results(experiment_rows, output_path)
+    assert output_path.parent.is_dir()
+    with output_path.open("r", encoding="utf-8", newline="") as result_file:
+        csv_reader = csv.reader(result_file)
+        assert next(csv_reader) == list(expected_experiment_columns)
+        serialized_configurations = [
+            row[expected_experiment_columns.index("parameter_configuration")]
+            for row in csv_reader
+        ]
+    assert serialized_configurations == [
+        '{"limits":{"lower":-5,"upper":5},"step_size":0.1}',
+        '{"limits":{"lower":-5,"upper":5},"step_size":0.1}',
+    ]
+
+    loaded_rows = read_experiment_results(output_path)
+    assert len(loaded_rows) == len(experiment_rows)
+    assert loaded_rows[0]["dataset"] == "Iris"
+    assert loaded_rows[0]["seed"] == "7"
+    assert loaded_rows[0]["parameter_configuration"] == first_configuration
+    assert loaded_rows[0]["run_status"] == "success"
+    assert loaded_rows[0]["failure_description"] == ""
+    assert loaded_rows[0]["matplotlib_version"] == "3.9.0"
+
+    try:
+        write_experiment_results(experiment_rows, output_path)
+    except FileExistsError:
+        pass
+    else:
+        raise AssertionError("Existing experiment results were overwritten.")
+    write_experiment_results(experiment_rows, output_path, overwrite=True)
+
+    failed_row = make_experiment_result_row(seed=9)
+    failed_row["run_status"] = "failed"
+    failed_row["failure_description"] = "Optimizer did not converge."
+    for metric in (
+        "best_fitness",
+        "final_population_best_fitness",
+        "silhouette",
+        "error_rate_percent",
+        "accuracy_percent",
+        "correct_count",
+        "incorrect_count",
+        "nonempty_cluster_count",
+        "empty_cluster_rejections",
+        "runtime_seconds",
+        "fitness_evaluation_count",
+        "accepted_movements",
+        "reproduction_events",
+        "elimination_events",
+        "dispersed_bacteria_count",
+    ):
+        failed_row[metric] = None
+
+    failed_output_path = temporary_root / "failed-results.csv"
+    write_experiment_results([failed_row], failed_output_path)
+    loaded_failed_row = read_experiment_results(failed_output_path)[0]
+    assert loaded_failed_row["run_status"] == "failed"
+    assert loaded_failed_row["failure_description"] == (
+        "Optimizer did not converge."
+    )
+    assert loaded_failed_row["best_fitness"] is None
+    assert loaded_failed_row["matplotlib_version"] == "3.9.0"
+
+    duplicate_rows = [
+        make_experiment_result_row(),
+        make_experiment_result_row(),
+    ]
+    assert_experiment_results_value_error(
+        lambda: write_experiment_results(
+            duplicate_rows,
+            temporary_root / "duplicates.csv",
+        )
+    )
+    assert_experiment_results_value_error(
+        lambda: write_experiment_results([], temporary_root / "empty.csv")
+    )
+
+    missing_field_row = make_experiment_result_row()
+    del missing_field_row["silhouette"]
+    assert_experiment_results_value_error(
+        lambda: write_experiment_results(
+            [missing_field_row],
+            temporary_root / "missing.csv",
+        )
+    )
+
+    unexpected_field_row = make_experiment_result_row()
+    unexpected_field_row["extra"] = "not allowed"
+    assert_experiment_results_value_error(
+        lambda: write_experiment_results(
+            [unexpected_field_row],
+            temporary_root / "unexpected.csv",
+        )
+    )
+
+    success_with_failure_text = make_experiment_result_row(seed=10)
+    success_with_failure_text["failure_description"] = "Unexpected failure."
+    assert_experiment_results_value_error(
+        lambda: write_experiment_results(
+            [success_with_failure_text],
+            temporary_root / "success-with-failure-text.csv",
+        )
+    )
+
+    failed_without_failure_text = make_experiment_result_row(seed=11)
+    failed_without_failure_text["run_status"] = "failed"
+    failed_without_failure_text["failure_description"] = ""
+    assert_experiment_results_value_error(
+        lambda: write_experiment_results(
+            [failed_without_failure_text],
+            temporary_root / "failed-without-description.csv",
+        )
+    )
+
+    invalid_status_row = make_experiment_result_row(seed=12)
+    invalid_status_row["run_status"] = "skipped"
+    assert_experiment_results_value_error(
+        lambda: write_experiment_results(
+            [invalid_status_row],
+            temporary_root / "invalid-status.csv",
+        )
+    )
+
+    success_without_metric = make_experiment_result_row(seed=13)
+    success_without_metric["best_fitness"] = None
+    assert_experiment_results_value_error(
+        lambda: write_experiment_results(
+            [success_without_metric],
+            temporary_root / "success-without-metric.csv",
+        )
+    )
+
+    duplicate_input = temporary_root / "duplicate-input.csv"
+    with duplicate_input.open("w", encoding="utf-8", newline="") as result_file:
+        csv_writer = csv.writer(result_file)
+        csv_writer.writerow(EXPERIMENT_RESULT_COLUMNS)
+        for row in duplicate_rows:
+            csv_writer.writerow(
+                [
+                    row[column]
+                    if column != "parameter_configuration"
+                    else '{"num_clusters":3,"step_size":0.1}'
+                    for column in EXPERIMENT_RESULT_COLUMNS
+                ]
+            )
+    assert_experiment_results_value_error(
+        lambda: read_experiment_results(duplicate_input)
+    )
+
+    malformed_input = temporary_root / "malformed.csv"
+    malformed_input.write_text("wrong,header\n", encoding="utf-8")
+    assert_experiment_results_value_error(
+        lambda: read_experiment_results(malformed_input)
+    )
+
+print("Experiment CSV tests passed.")
