@@ -7,6 +7,7 @@ They are written as empty CSV cells and restored to ``None`` when read.
 import csv
 import json
 from collections.abc import Mapping
+from numbers import Integral
 from pathlib import Path
 
 
@@ -84,7 +85,74 @@ def _serialize_configuration(configuration):
         ) from error
 
 
+def _is_finite_number(value):
+    if isinstance(value, bool):
+        return False
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return number != float("inf") and number != float("-inf") and number == number
+
+
+def _is_integer(value):
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, Integral):
+        return True
+    if isinstance(value, str):
+        try:
+            return str(int(value)) == value
+        except ValueError:
+            return False
+    return False
+
+
+def _validate_numeric_fields(row, row_number):
+    finite_columns = (
+        "best_fitness",
+        "final_population_best_fitness",
+        "silhouette",
+        "error_rate_percent",
+        "accuracy_percent",
+        "runtime_seconds",
+    )
+    integer_columns = (
+        "correct_count",
+        "incorrect_count",
+        "nonempty_cluster_count",
+        "empty_cluster_rejections",
+        "fitness_evaluation_count",
+        "accepted_movements",
+        "reproduction_events",
+        "elimination_events",
+        "dispersed_bacteria_count",
+    )
+
+    for column in finite_columns:
+        value = row[column]
+        if value is not None and not _is_finite_number(value):
+            raise ValueError(
+                f"Row {row_number} field {column} must be a finite number."
+            )
+
+    for column in integer_columns:
+        value = row[column]
+        if value is not None and (
+            not _is_integer(value) or int(value) < 0
+        ):
+            raise ValueError(
+                f"Row {row_number} field {column} must be a nonnegative integer."
+            )
+
+
 def _validate_row(row, row_number):
+    algorithm = row["algorithm"]
+    if algorithm not in ("BF", "CBF"):
+        raise ValueError(
+            f"Row {row_number} has invalid algorithm: {algorithm!r}"
+        )
+
     status = row["run_status"]
     if status not in ("success", "failed"):
         raise ValueError(
@@ -92,21 +160,55 @@ def _validate_row(row, row_number):
         )
 
     failure_description = row["failure_description"]
+    _validate_numeric_fields(row, row_number)
+
     if status == "success":
         if failure_description != "":
             raise ValueError(
                 f"Row {row_number} successful run must have an empty "
                 "failure_description."
             )
-        missing_metrics = [
+        required_metrics = [
             column
             for column in _RESULT_METRIC_COLUMNS
+            if not (
+                algorithm == "BF"
+                and column == "final_population_best_fitness"
+            )
+        ]
+        missing_metrics = [
+            column
+            for column in required_metrics
             if row[column] is None or row[column] == ""
         ]
         if missing_metrics:
             raise ValueError(
                 f"Row {row_number} successful run is missing result metrics: "
                 f"{missing_metrics}"
+            )
+        if algorithm == "BF" and row["final_population_best_fitness"] is not None:
+            raise ValueError(
+                f"Row {row_number} BF run must have "
+                "final_population_best_fitness set to None."
+            )
+        if algorithm == "CBF":
+            final_population_best = row["final_population_best_fitness"]
+            if final_population_best is None:
+                raise ValueError(
+                    f"Row {row_number} CBF run requires "
+                    "final_population_best_fitness."
+                )
+            if float(row["best_fitness"]) > float(final_population_best):
+                raise ValueError(
+                    f"Row {row_number} best_fitness must not exceed "
+                    "final_population_best_fitness."
+                )
+        if row["fitness_evaluation_count"] is None or int(
+            row["fitness_evaluation_count"]
+        ) <= 0:
+            raise ValueError(
+                f"Row {row_number} fitness_evaluation_count must be a "
+                "positive integer."
             )
     else:
         if (

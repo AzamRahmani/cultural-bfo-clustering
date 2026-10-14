@@ -852,7 +852,7 @@ def make_experiment_result_row(seed=7, parameter_configuration=None):
         "algorithm": "BF",
         "seed": seed,
         "best_fitness": 12.5,
-        "final_population_best_fitness": 13.0,
+        "final_population_best_fitness": None,
         "silhouette": 0.72,
         "error_rate_percent": 4.0,
         "accuracy_percent": 96.0,
@@ -955,6 +955,15 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     assert loaded_rows[0]["run_status"] == "success"
     assert loaded_rows[0]["failure_description"] == ""
     assert loaded_rows[0]["matplotlib_version"] == "3.9.0"
+    assert loaded_rows[0]["final_population_best_fitness"] is None
+
+    with output_path.open("r", encoding="utf-8", newline="") as result_file:
+        csv_reader = csv.reader(result_file)
+        next(csv_reader)
+        first_csv_row = next(csv_reader)
+    assert first_csv_row[
+        expected_experiment_columns.index("final_population_best_fitness")
+    ] == ""
 
     try:
         write_experiment_results(experiment_rows, output_path)
@@ -963,6 +972,55 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     else:
         raise AssertionError("Existing experiment results were overwritten.")
     write_experiment_results(experiment_rows, output_path, overwrite=True)
+
+    cbf_row = make_experiment_result_row(seed=14)
+    cbf_row["algorithm"] = "CBF"
+    cbf_row["final_population_best_fitness"] = 13.0
+    cbf_output_path = temporary_root / "cbf-results.csv"
+    write_experiment_results([cbf_row], cbf_output_path)
+    loaded_cbf_row = read_experiment_results(cbf_output_path)[0]
+    assert loaded_cbf_row["algorithm"] == "CBF"
+    assert loaded_cbf_row["final_population_best_fitness"] == "13.0"
+    assert float(loaded_cbf_row["best_fitness"]) <= float(
+        loaded_cbf_row["final_population_best_fitness"]
+    )
+
+    bf_with_final_population_fitness = make_experiment_result_row(seed=15)
+    bf_with_final_population_fitness["final_population_best_fitness"] = 13.0
+    assert_experiment_results_value_error(
+        lambda: write_experiment_results(
+            [bf_with_final_population_fitness],
+            temporary_root / "bf-with-final-fitness.csv",
+        )
+    )
+
+    cbf_without_final_population_fitness = make_experiment_result_row(seed=16)
+    cbf_without_final_population_fitness["algorithm"] = "CBF"
+    assert_experiment_results_value_error(
+        lambda: write_experiment_results(
+            [cbf_without_final_population_fitness],
+            temporary_root / "cbf-without-final-fitness.csv",
+        )
+    )
+
+    cbf_final_fitness_too_low = dict(cbf_row)
+    cbf_final_fitness_too_low["seed"] = 17
+    cbf_final_fitness_too_low["final_population_best_fitness"] = 12.0
+    assert_experiment_results_value_error(
+        lambda: write_experiment_results(
+            [cbf_final_fitness_too_low],
+            temporary_root / "cbf-inconsistent-fitness.csv",
+        )
+    )
+
+    unknown_algorithm_row = make_experiment_result_row(seed=18)
+    unknown_algorithm_row["algorithm"] = "KMeans"
+    assert_experiment_results_value_error(
+        lambda: write_experiment_results(
+            [unknown_algorithm_row],
+            temporary_root / "unknown-algorithm.csv",
+        )
+    )
 
     failed_row = make_experiment_result_row(seed=9)
     failed_row["run_status"] = "failed"
