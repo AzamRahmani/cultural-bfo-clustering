@@ -1,0 +1,2 @@
+# Store experiment results byte-for-byte so SHA-256 fingerprints stay valid.
+results/** -text
