@@ -1147,3 +1147,418 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     )
 
 print("Experiment CSV tests passed.")
+
+
+import subprocess
+from contextlib import redirect_stderr
+
+import matplotlib
+import scipy
+import sklearn
+
+import bf_reusable
+import data_loader
+from run_prototype_experiments import (
+    DATASET_CLUSTER_COUNTS,
+    MissingRequiredCounterError,
+    describe_failure,
+    execute_one_run,
+    execute_runs,
+    get_reproducibility_metadata,
+    main as run_prototype_main,
+    parameter_configuration,
+    parse_arguments,
+    planned_runs,
+)
+
+
+def repository_status():
+    return subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=Path(__file__).resolve().parent,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
+def run_prototype_quietly(argv):
+    with redirect_stdout(io.StringIO()) as captured_output:
+        with redirect_stderr(io.StringIO()):
+            exit_code = run_prototype_main(argv)
+    return exit_code, captured_output.getvalue()
+
+
+def assert_cli_rejected(argv):
+    try:
+        with redirect_stderr(io.StringIO()):
+            parse_arguments(argv)
+    except SystemExit as error:
+        assert error.code != 0
+        return
+    raise AssertionError(f"Expected command-line rejection for {argv}.")
+
+
+def make_fake_runner(calls, algorithm, **overrides):
+    def fake_runner(*args, **kwargs):
+        calls.append((args, kwargs))
+        labels = np.array([1, 1, 1, 0, 0, 0])
+        centers = np.array([[1.0, 1.0], [-1.0, -1.0]])
+        result = {
+            "best_fitness": 2.0,
+            "silhouette": 0.5,
+            "runtime_seconds": 0.01,
+            "fitness_evaluation_count": 10,
+            "labels": labels,
+            "centers": centers,
+            "accepted_movements": 4,
+            "reproduction_events": 1,
+            "elimination_events": 1,
+            "dispersed_bacteria_count": 2,
+            "empty_cluster_rejections": 0,
+        }
+        if algorithm == "CBF":
+            result["final_population_best_fitness"] = 3.0
+            result["belief_best_bacterium"] = centers.copy()
+        result.update(overrides)
+        return result
+
+    return fake_runner
+
+
+status_before_runner_tests = repository_status()
+
+default_runs = planned_runs(parse_arguments(["--dry-run"]))
+assert len(default_runs) == 240
+assert len(set(default_runs)) == 240
+assert {dataset for dataset, _, _ in default_runs} == {
+    "iris",
+    "wine",
+    "glass",
+    "cancer",
+}
+assert {algorithm for _, algorithm, _ in default_runs} == {"BF", "CBF"}
+assert {seed for _, _, seed in default_runs} == set(range(30))
+
+smoke_runs = planned_runs(
+    parse_arguments(["--dry-run", "--datasets", "iris", "--seeds", "0", "1"])
+)
+assert smoke_runs == (
+    ("iris", "BF", 0),
+    ("iris", "BF", 1),
+    ("iris", "CBF", 0),
+    ("iris", "CBF", 1),
+)
+
+with tempfile.TemporaryDirectory() as temporary_directory:
+    temporary_root = Path(temporary_directory)
+    existing_output = temporary_root / "existing.csv"
+    existing_output.write_text("keep me\n", encoding="utf-8")
+
+    for rejected_arguments in (
+        [],
+        ["--output", str(existing_output)],
+        ["--dry-run", "--datasets"],
+        ["--dry-run", "--datasets", "breast_cancer"],
+        ["--dry-run", "--datasets", "iris", "iris"],
+        ["--dry-run", "--algorithms", "KMeans"],
+        ["--dry-run", "--algorithms", "BF", "BF"],
+        ["--dry-run", "--seeds", "1", "1"],
+        ["--dry-run", "--seeds", "-1"],
+        ["--dry-run", "--seeds", "1.5"],
+    ):
+        assert_cli_rejected(rejected_arguments)
+
+    # Dry-run must not load datasets, execute algorithms, or create files.
+    def forbidden_call(*args, **kwargs):
+        raise AssertionError("Dry-run must not load data or run algorithms.")
+
+    original_loader = data_loader.load_standardized_dataset
+    original_run_bf = bf_reusable.run_bf
+    data_loader.load_standardized_dataset = forbidden_call
+    bf_reusable.run_bf = forbidden_call
+    try:
+        dry_run_output = temporary_root / "dry-run.csv"
+        exit_code, printed_plan = run_prototype_quietly(
+            ["--dry-run", "--output", str(dry_run_output)]
+        )
+        assert exit_code == 0
+        assert printed_plan.strip().endswith("Total planned runs: 240")
+        assert not dry_run_output.exists()
+
+        exit_code, _ = run_prototype_quietly(
+            ["--dry-run", "--output", str(existing_output)]
+        )
+        assert exit_code == 0
+        assert existing_output.read_text(encoding="utf-8") == "keep me\n"
+    finally:
+        data_loader.load_standardized_dataset = original_loader
+        bf_reusable.run_bf = original_run_bf
+    assert [path.name for path in temporary_root.iterdir()] == ["existing.csv"]
+
+for dataset in DATASET_CLUSTER_COUNTS:
+    bf_configuration = parameter_configuration("BF", dataset, 5)
+    cbf_configuration = parameter_configuration("CBF", dataset, 5)
+    assert bf_configuration["num_clusters"] == DATASET_CLUSTER_COUNTS[dataset]
+    assert bf_configuration["random_seed"] == 5
+    assert set(cbf_configuration) - set(bf_configuration) == {
+        "cultural_influence",
+        "acceptance_ratio",
+    }
+
+runner_metadata = get_reproducibility_metadata()
+assert set(runner_metadata) == {
+    "git_commit",
+    "python_version",
+    "numpy_version",
+    "sklearn_version",
+    "scipy_version",
+    "matplotlib_version",
+}
+assert len(runner_metadata["git_commit"]) == 40
+assert set(runner_metadata["git_commit"]) <= set("0123456789abcdef")
+assert runner_metadata["numpy_version"] == np.__version__
+assert runner_metadata["sklearn_version"] == sklearn.__version__
+assert runner_metadata["scipy_version"] == scipy.__version__
+assert runner_metadata["matplotlib_version"] == matplotlib.__version__
+
+fake_X = np.array(
+    [
+        [1.0, 1.1],
+        [0.9, 1.0],
+        [1.1, 0.9],
+        [-1.0, -1.1],
+        [-0.9, -1.0],
+        [-1.1, -0.9],
+    ]
+)
+fake_y = np.array([0, 0, 0, 1, 1, 1])
+fake_X_scaled = fake_X.copy()
+fake_dataset = (fake_X, fake_y, fake_X_scaled, ["a", "b"], ["first", "second"])
+
+
+def run_fake(algorithm, **overrides):
+    calls = []
+    configuration = parameter_configuration(algorithm, "cancer", 3)
+    row = execute_one_run(
+        "cancer",
+        algorithm,
+        3,
+        fake_dataset,
+        configuration,
+        runner_metadata,
+        {algorithm: make_fake_runner(calls, algorithm, **overrides)},
+        np,
+        clustering_error_rate,
+    )
+    return row, calls, configuration
+
+
+fake_rows = []
+for algorithm in ("BF", "CBF"):
+    fake_row, fake_calls, fake_configuration = run_fake(algorithm)
+    fake_rows.append(fake_row)
+    assert len(fake_calls) == 1
+    call_args, call_kwargs = fake_calls[0]
+
+    # Only the standardized features reach the optimizer; labels do not.
+    assert len(call_args) == 1
+    assert call_args[0] is fake_X_scaled
+    assert all(value is not fake_y for value in call_kwargs.values())
+    # The recorded configuration must equal the arguments actually used.
+    assert call_kwargs == fake_configuration
+
+    assert set(fake_row) == set(EXPERIMENT_RESULT_COLUMNS)
+    assert fake_row["run_status"] == "success"
+    assert fake_row["failure_description"] == ""
+    assert fake_row["parameter_configuration"] == fake_configuration
+    assert fake_row["nonempty_cluster_count"] == 2
+    # Cluster identifiers are swapped relative to classes; mapping fixes this.
+    assert fake_row["accuracy_percent"] == 100.0
+    assert fake_row["error_rate_percent"] == 0.0
+    assert fake_row["correct_count"] == 6
+    assert fake_row["incorrect_count"] == 0
+    for field, value in runner_metadata.items():
+        assert fake_row[field] == value
+
+assert fake_rows[0]["final_population_best_fitness"] is None
+assert fake_rows[1]["final_population_best_fitness"] == 3.0
+assert fake_rows[1]["best_fitness"] <= fake_rows[1][
+    "final_population_best_fitness"
+]
+
+for algorithm, overrides in (
+    ("CBF", {"final_population_best_fitness": 1.0}),
+    ("CBF", {"belief_best_bacterium": np.array([[0.0, 0.0], [1.0, 1.0]])}),
+    ("BF", {"labels": np.zeros(6, dtype=int)}),
+    ("BF", {"labels": np.array([0, 1, 0])}),
+    ("BF", {"centers": np.zeros((3, 2))}),
+    ("BF", {"best_fitness": float("inf")}),
+):
+    try:
+        run_fake(algorithm, **overrides)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(f"Invalid {algorithm} result was accepted.")
+
+for algorithm, overrides in (
+    ("BF", {"fitness_evaluation_count": None}),
+    ("CBF", {"accepted_movements": None}),
+):
+    try:
+        run_fake(algorithm, **overrides)
+    except MissingRequiredCounterError:
+        pass
+    else:
+        raise AssertionError("Unavailable required counter was accepted.")
+
+
+def run_fake_without_counter(*args, **kwargs):
+    result = make_fake_runner([], "BF")(*args, **kwargs)
+    del result["dispersed_bacteria_count"]
+    return result
+
+
+try:
+    execute_one_run(
+        "cancer",
+        "BF",
+        3,
+        fake_dataset,
+        parameter_configuration("BF", "cancer", 3),
+        runner_metadata,
+        {"BF": run_fake_without_counter},
+        np,
+        clustering_error_rate,
+    )
+except MissingRequiredCounterError:
+    pass
+else:
+    raise AssertionError("Missing required counter was accepted.")
+
+assert describe_failure(ValueError("first\n   second")) == (
+    "ValueError: first second"
+)
+assert describe_failure(RuntimeError()) == (
+    "RuntimeError: No exception message was provided."
+)
+long_description = describe_failure(ValueError("x" * 1000))
+assert len(long_description) == 500
+assert long_description.endswith("...")
+
+loader_calls = []
+
+
+def failing_loader(dataset_name):
+    loader_calls.append(dataset_name)
+    raise OSError("dataset source unavailable")
+
+
+def failing_run_bf(*args, **kwargs):
+    raise RuntimeError("optimizer crashed")
+
+
+original_loader = data_loader.load_standardized_dataset
+original_run_bf = bf_reusable.run_bf
+try:
+    data_loader.load_standardized_dataset = failing_loader
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        load_failure_rows = execute_runs(
+            (("glass", "BF", 0), ("glass", "CBF", 0)),
+            runner_metadata,
+        )
+    data_loader.load_standardized_dataset = original_loader
+
+    bf_reusable.run_bf = failing_run_bf
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        runner_failure_rows = execute_runs(
+            (("iris", "BF", 4),),
+            runner_metadata,
+        )
+finally:
+    data_loader.load_standardized_dataset = original_loader
+    bf_reusable.run_bf = original_run_bf
+
+# A dataset that fails to load is attempted once; every planned run is kept.
+assert loader_calls == ["glass"]
+assert [row["failure_description"] for row in load_failure_rows] == [
+    "OSError: dataset source unavailable",
+    "OSError: dataset source unavailable",
+]
+assert runner_failure_rows[0]["failure_description"] == (
+    "RuntimeError: optimizer crashed"
+)
+failure_rows = load_failure_rows + runner_failure_rows
+assert [
+    (row["dataset"], row["algorithm"], row["seed"]) for row in failure_rows
+] == [("glass", "BF", 0), ("glass", "CBF", 0), ("iris", "BF", 4)]
+for failure_row in failure_rows:
+    assert set(failure_row) == set(EXPERIMENT_RESULT_COLUMNS)
+    assert failure_row["run_status"] == "failed"
+    assert failure_row["best_fitness"] is None
+    assert failure_row["runtime_seconds"] is None
+    assert failure_row["fitness_evaluation_count"] is None
+    assert failure_row["git_commit"] == runner_metadata["git_commit"]
+
+with tempfile.TemporaryDirectory() as temporary_directory:
+    temporary_root = Path(temporary_directory)
+    write_experiment_results(failure_rows, temporary_root / "failures.csv")
+    assert len(read_experiment_results(temporary_root / "failures.csv")) == 3
+
+    smoke_arguments = ["--datasets", "iris", "--seeds", "0", "1"]
+    smoke_outputs = (
+        temporary_root / "smoke-1.csv",
+        temporary_root / "smoke-2.csv",
+    )
+    for smoke_output in smoke_outputs:
+        exit_code, _ = run_prototype_quietly(
+            smoke_arguments + ["--output", str(smoke_output)]
+        )
+        assert exit_code == 0
+
+    first_smoke_rows = read_experiment_results(smoke_outputs[0])
+    second_smoke_rows = read_experiment_results(smoke_outputs[1])
+    assert len(first_smoke_rows) == 4
+    assert len(second_smoke_rows) == 4
+    assert [
+        (row["dataset"], row["algorithm"], row["seed"])
+        for row in first_smoke_rows
+    ] == [
+        ("iris", "BF", "0"),
+        ("iris", "BF", "1"),
+        ("iris", "CBF", "0"),
+        ("iris", "CBF", "1"),
+    ]
+    for first_row, second_row in zip(first_smoke_rows, second_smoke_rows):
+        assert first_row["run_status"] == "success"
+        assert first_row["nonempty_cluster_count"] == "3"
+        assert first_row["git_commit"] == runner_metadata["git_commit"]
+        assert first_row["parameter_configuration"] == parameter_configuration(
+            first_row["algorithm"],
+            first_row["dataset"],
+            int(first_row["seed"]),
+        )
+        if first_row["algorithm"] == "BF":
+            assert first_row["final_population_best_fitness"] is None
+        else:
+            assert float(first_row["best_fitness"]) <= float(
+                first_row["final_population_best_fitness"]
+            )
+        # Runtime is environment-dependent; every other field must repeat.
+        for column in EXPERIMENT_RESULT_COLUMNS:
+            if column != "runtime_seconds":
+                assert first_row[column] == second_row[column], column
+
+    protected_contents = smoke_outputs[0].read_bytes()
+    assert_cli_rejected(smoke_arguments + ["--output", str(smoke_outputs[0])])
+    assert smoke_outputs[0].read_bytes() == protected_contents
+    exit_code, _ = run_prototype_quietly(
+        smoke_arguments + ["--output", str(smoke_outputs[0]), "--overwrite"]
+    )
+    assert exit_code == 0
+    assert len(read_experiment_results(smoke_outputs[0])) == 4
+
+assert repository_status() == status_before_runner_tests
+
+print("Prototype runner tests passed.")
