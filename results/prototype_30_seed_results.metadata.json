@@ -1,0 +1,23 @@
+{
+  "allow_dirty_tree": false,
+  "command": [
+    "D:\\Thesis\\.venv\\Scripts\\python.exe",
+    "run_prototype_experiments.py",
+    "--output",
+    "results/prototype_30_seed_results.csv"
+  ],
+  "completed_at_utc": "2026-11-01T23:50:37+00:00",
+  "failed_row_count": 8,
+  "git_commit": "3f29075540e0680d783b89279c75275278970d8a",
+  "git_tree_clean": true,
+  "matplotlib_version": "3.11.1",
+  "numpy_version": "2.5.2",
+  "operating_system": "Windows-11-10.0.26300-SP0",
+  "python_version": "3.14.5",
+  "results_file": "prototype_30_seed_results.csv",
+  "results_sha256": "68d407c7bb9e4824383b1122c161c0925eb11a38f867460f33abcfa88d622eb8",
+  "row_count": 240,
+  "scipy_version": "1.18.0",
+  "sklearn_version": "1.9.0",
+  "started_at_utc": "2026-11-01T23:48:17+00:00"
+}
