@@ -1,10 +1,14 @@
 """Run the configurable repeated-seed BF/CBF prototype experiment."""
 
 import argparse
+import hashlib
 import itertools
+import json
 import math
+import platform
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 DATASET_CLUSTER_COUNTS = {
@@ -71,6 +75,7 @@ def parse_arguments(argv=None):
     )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--allow-dirty-tree", action="store_true")
     arguments = parser.parse_args(argv)
 
     if not arguments.datasets:
@@ -100,13 +105,45 @@ def parse_arguments(argv=None):
     if not arguments.dry_run:
         if arguments.output is None:
             parser.error("--output is required unless --dry-run is specified")
-        if arguments.output.exists() and not arguments.overwrite:
-            parser.error(
-                f"output already exists; use --overwrite to replace it: "
-                f"{arguments.output}"
-            )
+        for path in (arguments.output, metadata_path_for(arguments.output)):
+            if path.exists() and not arguments.overwrite:
+                parser.error(
+                    f"output already exists; use --overwrite to replace it: "
+                    f"{path}"
+                )
 
     return arguments
+
+
+def metadata_path_for(output_path):
+    return output_path.with_name(output_path.stem + ".metadata.json")
+
+
+def git_tree_is_clean():
+    # Only tracked files count; untracked files cannot change committed code.
+    repository_root = Path(__file__).resolve().parent
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=repository_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError("Could not read the Git working-tree status.") from error
+    return status.strip() == ""
+
+
+def utc_timestamp():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def write_run_metadata(path, run_metadata, overwrite):
+    mode = "w" if overwrite else "x"
+    with path.open(mode, encoding="utf-8", newline="\n") as metadata_file:
+        json.dump(run_metadata, metadata_file, indent=2, sort_keys=True)
+        metadata_file.write("\n")
 
 
 def planned_runs(arguments):
@@ -415,17 +452,29 @@ def execute_runs(runs, metadata):
 
 
 def main(argv=None):
-    arguments = parse_arguments(argv)
+    command_arguments = list(sys.argv[1:] if argv is None else argv)
+    arguments = parse_arguments(command_arguments)
     runs = planned_runs(arguments)
     if arguments.dry_run:
         print_plan(runs)
         return 0
 
     try:
+        tree_clean = git_tree_is_clean()
+        if not tree_clean and not arguments.allow_dirty_tree:
+            print(
+                "ERROR: Tracked files have uncommitted changes. Commit them "
+                "first, or use --allow-dirty-tree for a non-final run.",
+                file=sys.stderr,
+            )
+            return 1
+
         from experiment_results import write_experiment_results
 
+        started_at_utc = utc_timestamp()
         metadata = get_reproducibility_metadata()
         rows = execute_runs(runs, metadata)
+        completed_at_utc = utc_timestamp()
     except MissingRequiredCounterError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
@@ -452,9 +501,35 @@ def main(argv=None):
         return 1
 
     failed_runs = sum(row["run_status"] == "failed" for row in rows)
+    metadata_path = metadata_path_for(arguments.output)
+    run_metadata = {
+        **metadata,
+        "git_tree_clean": tree_clean,
+        "allow_dirty_tree": arguments.allow_dirty_tree,
+        "operating_system": platform.platform(),
+        "command": [sys.executable, Path(__file__).name, *command_arguments],
+        "started_at_utc": started_at_utc,
+        "completed_at_utc": completed_at_utc,
+        "results_file": arguments.output.name,
+        "row_count": len(rows),
+        "failed_row_count": failed_runs,
+        "results_sha256": hashlib.sha256(
+            arguments.output.read_bytes()
+        ).hexdigest(),
+    }
+    try:
+        write_run_metadata(metadata_path, run_metadata, arguments.overwrite)
+    except Exception as error:
+        print(
+            f"ERROR: Could not write run metadata: "
+            f"{describe_failure(error)}",
+            file=sys.stderr,
+        )
+        return 1
+
     print(
         f"Wrote {len(rows)} experiment result rows to {arguments.output} "
-        f"({failed_runs} failed)."
+        f"({failed_runs} failed) and run metadata to {metadata_path}."
     )
     return 0
 

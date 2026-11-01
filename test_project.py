@@ -1149,7 +1149,11 @@ with tempfile.TemporaryDirectory() as temporary_directory:
 print("Experiment CSV tests passed.")
 
 
+import hashlib
+import json
+import platform
 import subprocess
+import sys
 from contextlib import redirect_stderr
 
 import matplotlib
@@ -1158,6 +1162,7 @@ import sklearn
 
 import bf_reusable
 import data_loader
+import run_prototype_experiments
 from run_prototype_experiments import (
     DATASET_CLUSTER_COUNTS,
     MissingRequiredCounterError,
@@ -1165,7 +1170,9 @@ from run_prototype_experiments import (
     execute_one_run,
     execute_runs,
     get_reproducibility_metadata,
+    git_tree_is_clean,
     main as run_prototype_main,
+    metadata_path_for,
     parameter_configuration,
     parse_arguments,
     planned_runs,
@@ -1295,6 +1302,49 @@ with tempfile.TemporaryDirectory() as temporary_directory:
         data_loader.load_standardized_dataset = original_loader
         bf_reusable.run_bf = original_run_bf
     assert [path.name for path in temporary_root.iterdir()] == ["existing.csv"]
+
+    assert metadata_path_for(Path("out") / "results.csv") == (
+        Path("out") / "results.metadata.json"
+    )
+    assert isinstance(git_tree_is_clean(), bool)
+
+    # A dirty tree, or an unreadable Git status, stops a real run before any
+    # data is loaded or any file is written.
+    def dirty_tree():
+        return False
+
+    def unreadable_tree():
+        raise RuntimeError("Could not read the Git working-tree status.")
+
+    original_tree_check = run_prototype_experiments.git_tree_is_clean
+    data_loader.load_standardized_dataset = forbidden_call
+    try:
+        for tree_check in (dirty_tree, unreadable_tree):
+            run_prototype_experiments.git_tree_is_clean = tree_check
+            refused_output = temporary_root / "refused.csv"
+            exit_code, _ = run_prototype_quietly(
+                [
+                    "--datasets",
+                    "iris",
+                    "--seeds",
+                    "0",
+                    "--output",
+                    str(refused_output),
+                ]
+            )
+            assert exit_code == 1
+            assert not refused_output.exists()
+            assert not metadata_path_for(refused_output).exists()
+    finally:
+        run_prototype_experiments.git_tree_is_clean = original_tree_check
+        data_loader.load_standardized_dataset = original_loader
+    assert [path.name for path in temporary_root.iterdir()] == ["existing.csv"]
+
+    # An existing sidecar is protected even when the CSV is absent.
+    orphan_metadata = temporary_root / "orphan.metadata.json"
+    orphan_metadata.write_text("{}\n", encoding="utf-8")
+    assert_cli_rejected(["--output", str(temporary_root / "orphan.csv")])
+    assert orphan_metadata.read_text(encoding="utf-8") == "{}\n"
 
 for dataset in DATASET_CLUSTER_COUNTS:
     bf_configuration = parameter_configuration("BF", dataset, 5)
@@ -1506,7 +1556,16 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     write_experiment_results(failure_rows, temporary_root / "failures.csv")
     assert len(read_experiment_results(temporary_root / "failures.csv")) == 3
 
-    smoke_arguments = ["--datasets", "iris", "--seeds", "0", "1"]
+    # Tests run while code is being edited, so the dirty-tree override is used
+    # and must be recorded in the run metadata.
+    smoke_arguments = [
+        "--datasets",
+        "iris",
+        "--seeds",
+        "0",
+        "1",
+        "--allow-dirty-tree",
+    ]
     smoke_outputs = (
         temporary_root / "smoke-1.csv",
         temporary_root / "smoke-2.csv",
@@ -1550,14 +1609,62 @@ with tempfile.TemporaryDirectory() as temporary_directory:
             if column != "runtime_seconds":
                 assert first_row[column] == second_row[column], column
 
+    expected_run_metadata_fields = set(runner_metadata) | {
+        "git_tree_clean",
+        "allow_dirty_tree",
+        "operating_system",
+        "command",
+        "started_at_utc",
+        "completed_at_utc",
+        "results_file",
+        "row_count",
+        "failed_row_count",
+        "results_sha256",
+    }
+    for smoke_output in smoke_outputs:
+        run_metadata = json.loads(
+            metadata_path_for(smoke_output).read_text(encoding="utf-8")
+        )
+        assert set(run_metadata) == expected_run_metadata_fields
+        for field, value in runner_metadata.items():
+            assert run_metadata[field] == value
+        assert isinstance(run_metadata["git_tree_clean"], bool)
+        assert run_metadata["allow_dirty_tree"] is True
+        assert run_metadata["operating_system"] == platform.platform()
+        assert run_metadata["command"] == [
+            sys.executable,
+            "run_prototype_experiments.py",
+            *smoke_arguments,
+            "--output",
+            str(smoke_output),
+        ]
+        assert run_metadata["started_at_utc"].endswith("+00:00")
+        assert (
+            run_metadata["started_at_utc"] <= run_metadata["completed_at_utc"]
+        )
+        assert run_metadata["results_file"] == smoke_output.name
+        assert run_metadata["row_count"] == 4
+        assert run_metadata["failed_row_count"] == 0
+        assert run_metadata["results_sha256"] == hashlib.sha256(
+            smoke_output.read_bytes()
+        ).hexdigest()
+
     protected_contents = smoke_outputs[0].read_bytes()
+    protected_metadata = metadata_path_for(smoke_outputs[0]).read_bytes()
     assert_cli_rejected(smoke_arguments + ["--output", str(smoke_outputs[0])])
     assert smoke_outputs[0].read_bytes() == protected_contents
+    assert metadata_path_for(smoke_outputs[0]).read_bytes() == protected_metadata
     exit_code, _ = run_prototype_quietly(
         smoke_arguments + ["--output", str(smoke_outputs[0]), "--overwrite"]
     )
     assert exit_code == 0
     assert len(read_experiment_results(smoke_outputs[0])) == 4
+    overwritten_metadata = json.loads(
+        metadata_path_for(smoke_outputs[0]).read_text(encoding="utf-8")
+    )
+    assert overwritten_metadata["results_sha256"] == hashlib.sha256(
+        smoke_outputs[0].read_bytes()
+    ).hexdigest()
 
 assert repository_status() == status_before_runner_tests
 
