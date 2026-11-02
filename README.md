@@ -4,26 +4,38 @@ This repository is a Python reimplementation and incremental evaluation of a mas
 
 The current repository is an exploratory prototype. It is not yet the complete thesis reproduction.
 
+## Experiment V1 (Project A)
+
+The predefined prototype experiment ran once: 4 datasets (Iris, Wine, Glass, Cancer) × 2 algorithms (BF, CBF) × 30 seeds = 240 runs, with 8 Glass failures retained.
+
+- `EXPERIMENT_PROTOCOL.md`: the experiment protocol
+- `EXPERIMENT_V1_RUN_RECORD.md`: execution record, validation, failures, and the documented CBF archive gap
+- `ANALYSIS_PLAN.md`: statistical methods, fixed before any metric was summarized
+- `RESULTS_V1.md`: results and their interpretation limits
+- `results/`: raw results, run metadata sidecar, and analysis outputs, stored byte for byte
+
+In short: the BF–CBF difference depends on the dataset and the metric, CBF used more fitness evaluations, and no general superiority of either method is established.
+
 ## Current Implementation
 
-- Reproducible K-Means baseline
+- K-Means baselines for Iris, Wine, Glass, and Cancer
 - Manual verification of the within-cluster squared-distance calculation
-- Simplified BF population initialization
-- Tumble-and-swim movement
-- Bacterial health accumulation
-- Reproduction
-- Elimination-dispersal
-- Situational cultural knowledge
-- Normative cultural knowledge
-- Iris comparison script
-- Comparison visualization
-- Wine K-Means baseline
-- Wine PCA visualization
-- Reusable BF implementation for Iris and Wine
-- Reusable CBF prototype for Iris and Wine
+- Reusable BF (`run_bf`) with tumble-and-swim movement, health accumulation, reproduction, and elimination-dispersal
+- Reusable CBF prototype (`run_cbf`) with situational and normative knowledge and an archived best solution
+- Temporary empty-cluster rejection policy
+- Runtime and fitness-evaluation instrumentation
+- External evaluation with optimal cluster-to-class mapping (`clustering_evaluation.py`)
+- Validated CSV result records (`experiment_results.py`)
+- Configurable experiment runner with clean-tree check and metadata sidecar (`run_prototype_experiments.py`)
+- Predeclared statistical analysis (`analyze_prototype_results.py`)
+- Standalone Jcc interaction utility, not connected to BF or CBF (`bacterial_interaction.py`)
 
 ## Project Files
 
+- `data_loader.py`: Loads and standardizes the four verified datasets
+- `run_prototype_experiments.py`: Runs the protocol experiment and writes results plus `.metadata.json`
+- `analyze_prototype_results.py`: Validates results and writes descriptive and paired-test CSVs
+- `test_project.py`: Regression and behavior tests for the whole repository
 - `iris_baseline.py`: K-Means baseline and manual distance verification
 - `bf_iris.py`: Simplified BF prototype with tumble-and-swim, health accumulation, reproduction, and elimination-dispersal
 - `cbf_iris.py`: Experimental CBF prototype with situational and normative knowledge
@@ -149,8 +161,13 @@ py -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
-## Run the Experiments
+## Run the Tests and Experiment
 
 ```powershell
-python wine_baseline.py
+python test_project.py
+python run_prototype_experiments.py --dry-run
+python run_prototype_experiments.py --output <new path>.csv
+python analyze_prototype_results.py --output-dir <new folder>
 ```
+
+A real experiment run refuses to start when tracked files have uncommitted changes. The committed V1 results must not be overwritten; write new runs to a new path.

@@ -55,12 +55,12 @@ These baselines are verified software behavior in the current codebase. They are
 | random-seed protocol | Reusable functions accept a random_seed parameter and fixed-seed regression runs are used | Verified software behavior | README.md; test_project.py; evaluate_wine_seeds.py | Low | Confirm the thesis seed protocol if the original method prescribes a specific randomization strategy |
 | within-cluster distance reporting | Distances are reported as sum of squared distances and used as a fitness metric | Verified software behavior | README.md; test_project.py; compare_wine.py | Moderate | Confirm the exact thesis metric reporting convention and whether it uses a different normalization or objective |
 | standard-deviation reporting | Standard deviations are reported for seed-based results in the evaluation scripts | Verified software behavior | evaluate_wine_seeds.py; evaluate_glass_seeds.py; evaluate_cancer_seeds.py | Low | Verify the thesis definition of sample standard deviation versus population standard deviation |
-| error-rate calculation | No explicit thesis-level error-rate calculation is implemented in the documented prototype | Missing implementation | README.md; repository files | High | Reconstruct the exact error-rate definition and implement it only if the thesis defines it |
-| cluster-to-class mapping | The repository does not implement a thesis-required mapping from cluster labels to classes | Missing implementation | README.md; clustering scripts | High | Only add this if the thesis specifies a cluster-to-class mapping procedure and validation rule |
+| error-rate calculation | Error rate is computed after optimization from the optimal cluster-to-class assignment | Verified software behavior | clustering_evaluation.py; test_project.py | Moderate | Confirm that the thesis error-rate definition matches optimal one-to-one mapping |
+| cluster-to-class mapping | Optimal one-to-one mapping via the Hungarian algorithm on the contingency matrix | Verified software behavior | clustering_evaluation.py; test_project.py | Moderate | Confirm the thesis mapping procedure |
 | GSA comparison | No GSA procedure or comparison implementation exists in the repository | Missing implementation | repository files | High | Do not invent GSA behavior. Verify against the original thesis requirements before implementing |
 | BH comparison | No BH procedure or comparison implementation exists in the repository | Missing implementation | repository files | High | Do not invent BH behavior. Verify against the original thesis requirements before implementing |
-| repeated-run count | Seed sweeps exist for 5 seeds in several evaluation scripts, but this is not necessarily the thesis protocol | Requires thesis verification | evaluate_wine_seeds.py; evaluate_glass_seeds.py; evaluate_cancer_seeds.py | High | Establish the exact repeated-run count required by the thesis and document the protocol before claiming statistical validity |
-| statistical testing | No final statistical test plan is implemented or documented as a thesis procedure | Requires thesis verification | README.md; evaluation scripts | High | Define the exact test procedure after the thesis reporting protocol is verified |
+| repeated-run count | The project protocol fixes 30 seeds (0-29); experiment V1 executed all 240 runs. This is a project protocol, not necessarily the thesis protocol | Requires thesis verification | EXPERIMENT_PROTOCOL.md; EXPERIMENT_V1_RUN_RECORD.md | Moderate | Establish the thesis repeated-run count before comparing with thesis-reported values |
+| statistical testing | A predeclared plan (t interval, paired Wilcoxon, rank-biserial r, Holm) is implemented for the project experiment; it is not a thesis procedure | Verified software behavior | ANALYSIS_PLAN.md; analyze_prototype_results.py; RESULTS_V1.md | Moderate | Compare with the thesis reporting protocol if it defines one |
 
 ## Empty-cluster rejection policy
 
@@ -102,6 +102,8 @@ Important constraints:
 
 This means the current prototype results are descriptive only and should be treated as software-level evidence, not as a final scientific conclusion.
 
+The 30-seed experiment V1 supersedes the five-seed evaluations for the reusable prototypes. Its results are in `RESULTS_V1.md`; they show dataset- and metric-dependent differences and no general superiority of BF or CBF.
+
 ## Prioritized verification backlog
 
 ### Priority 1
@@ -123,12 +125,9 @@ This means the current prototype results are descriptive only and should be trea
 
 ### Priority 3
 
-- predefined 30-seed protocol
-- runtime measurement
 - convergence tracking
-- fitness-evaluation counts
-- machine-readable result files
-- statistical analysis
+
+Completed in Project A: predefined 30-seed protocol, runtime measurement, fitness-evaluation counts, machine-readable result files, and statistical analysis.
 
 ## Project A and Project B Boundary
 
