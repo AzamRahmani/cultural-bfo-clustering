@@ -111,5 +111,8 @@ evaluation cost.
 .\.venv\Scripts\python.exe analyze_prototype_results.py --output-dir <new folder>
 ```
 
-The analysis validates the result fingerprint first and is deterministic; the
-outputs should match the committed files byte for byte.
+The analysis validates the result fingerprint first and is deterministic; on
+the original Windows environment the outputs match the committed files byte
+for byte. In the Linux Docker image, confidence-interval bounds can differ in
+the last floating-point digit (relative difference about 1e-15); see the
+Docker section of `README.md`.
