@@ -1,0 +1,3 @@
+# The Dockerfile reconstructs files from Git history; send only the repository.
+*
+!.git

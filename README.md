@@ -171,3 +171,19 @@ python analyze_prototype_results.py --output-dir <new folder>
 ```
 
 A real experiment run refuses to start when tracked files have uncommitted changes. The committed V1 results must not be overwritten; write new runs to a new path.
+
+## Docker
+
+The image is built from a committed Git state, never from the working tree, and caches the OpenML datasets so it runs without network access.
+
+```powershell
+docker build --build-arg GIT_REF=project-a-v1 -t cultural-bfo-clustering:project-a-v1 .
+docker run --rm --network none cultural-bfo-clustering:project-a-v1
+docker run --rm --network none cultural-bfo-clustering:project-a-v1 python analyze_prototype_results.py --output-dir /tmp/out
+```
+
+Verified on 2026-11-02 (Linux container, Python 3.14.5, image `python:3.14.5-slim-bookworm`):
+
+- `test_project.py` passes offline with the same seed-42 regression values and fitness-evaluation counts as on Windows.
+- The V1 results CSV keeps its recorded SHA-256 fingerprint.
+- Re-running the analysis gives identical paired-test output. In the descriptive output, 27 confidence-interval bounds differ from the Windows-generated file in the last floating-point digit (maximum relative difference 1.2e-15), from platform differences in floating-point libraries; all other values are identical.
