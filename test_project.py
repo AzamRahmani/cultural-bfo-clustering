@@ -1669,3 +1669,127 @@ with tempfile.TemporaryDirectory() as temporary_directory:
 assert repository_status() == status_before_runner_tests
 
 print("Prototype runner tests passed.")
+
+
+import shutil
+
+from analyze_prototype_results import (
+    DESCRIPTIVE_COLUMNS,
+    METRIC_DIRECTIONS,
+    PAIRED_COLUMNS,
+    describe,
+    holm_adjust,
+    main as analyze_main,
+    output_paths,
+    paired_comparison,
+    rank_biserial,
+    validate_result_set,
+)
+
+status_before_analysis_tests = repository_status()
+
+# Reference values: s = sqrt(5/3), t(0.975, 3) = 3.182446, half-width 2.054260.
+summary = describe([1.0, 2.0, 3.0, 4.0])
+assert summary["mean"] == 2.5
+assert np.isclose(summary["std_population"], np.sqrt(1.25))
+assert summary["median"] == 2.5
+assert (summary["q1"], summary["q3"], summary["iqr"]) == (1.75, 3.25, 1.5)
+assert np.isclose(summary["ci95_lower"], 2.5 - 2.054260, atol=1e-6)
+assert np.isclose(summary["ci95_upper"], 2.5 + 2.054260, atol=1e-6)
+constant_summary = describe([5.0, 5.0, 5.0])
+assert (constant_summary["ci95_lower"], constant_summary["ci95_upper"]) == (
+    5.0,
+    5.0,
+)
+single_summary = describe([7.0])
+assert single_summary["ci95_lower"] is None
+assert single_summary["ci95_upper"] is None
+assert describe([])["mean"] is None
+
+assert rank_biserial([1.0, 2.0, 3.0]) == 1.0
+assert rank_biserial([-1.0, -2.0]) == -1.0
+assert rank_biserial([1.0, 2.0, -3.0]) == 0.0
+assert rank_biserial([0.0, 0.0]) == 0.0
+
+adjusted = holm_adjust([0.01, 0.04, 0.03, None])
+assert np.allclose(adjusted[:3], [0.03, 0.06, 0.06])
+assert adjusted[3] is None
+assert holm_adjust([0.6, 0.9]) == [1.0, 1.0]
+
+# Five positive differences: exact two-sided Wilcoxon p = 2 / 2**5.
+comparison = paired_comparison([0, 0, 0, 0, 0], [1, 2, 3, 4, 5])
+assert comparison["wilcoxon_statistic"] == 0.0
+assert np.isclose(comparison["p_value"], 0.0625)
+assert comparison["rank_biserial"] == 1.0
+assert comparison["cbf_higher_count"] == 5
+assert comparison["median_difference_cbf_minus_bf"] == 3.0
+tied_comparison = paired_comparison([2, 2], [2, 2])
+assert tied_comparison["p_value"] is None
+assert tied_comparison["tie_count"] == 2
+assert tied_comparison["rank_biserial"] == 0.0
+
+committed_results = Path("results") / "prototype_30_seed_results.csv"
+committed_metadata = metadata_path_for(committed_results)
+validate_result_set(read_experiment_results(committed_results), committed_results)
+
+with tempfile.TemporaryDirectory() as temporary_directory:
+    temporary_root = Path(temporary_directory)
+    tampered_results = temporary_root / "tampered.csv"
+    shutil.copyfile(committed_results, tampered_results)
+    tampered_metadata = json.loads(committed_metadata.read_text(encoding="utf-8"))
+    tampered_metadata["results_sha256"] = "0" * 64
+    metadata_path_for(tampered_results).write_text(
+        json.dumps(tampered_metadata),
+        encoding="utf-8",
+    )
+    with redirect_stderr(io.StringIO()):
+        assert analyze_main(
+            ["--results", str(tampered_results), "--output-dir", str(temporary_root)]
+        ) == 1
+    assert not any(path.exists() for path in output_paths(temporary_root))
+
+    first_output, second_output = temporary_root / "a", temporary_root / "b"
+    for analysis_output in (first_output, second_output):
+        with redirect_stdout(io.StringIO()):
+            assert analyze_main(["--output-dir", str(analysis_output)]) == 0
+    for first_path, second_path in zip(
+        output_paths(first_output),
+        output_paths(second_output),
+    ):
+        assert first_path.read_bytes() == second_path.read_bytes()
+
+    descriptive_path, paired_path = output_paths(first_output)
+    with descriptive_path.open(encoding="utf-8", newline="") as file:
+        descriptive = list(csv.DictReader(file))
+    with paired_path.open(encoding="utf-8", newline="") as file:
+        paired = list(csv.DictReader(file))
+    assert tuple(descriptive[0]) == DESCRIPTIVE_COLUMNS
+    assert tuple(paired[0]) == PAIRED_COLUMNS
+    assert len(descriptive) == 4 * 2 * len(METRIC_DIRECTIONS)
+    assert len(paired) == 4 * len(METRIC_DIRECTIONS)
+    for row in descriptive:
+        expected_failures = {("glass", "BF"): 3, ("glass", "CBF"): 5}.get(
+            (row["dataset"], row["algorithm"]),
+            0,
+        )
+        assert int(row["failed_runs"]) == expected_failures
+        assert int(row["successful_runs"]) == 30 - expected_failures
+    for row in paired:
+        if row["dataset"] == "glass":
+            assert row["pairs"] == "25"
+            assert row["excluded_seeds"] == "9;11;13;19;28"
+        else:
+            assert row["pairs"] == "30"
+            assert row["excluded_seeds"] == ""
+        assert row["role"] == (
+            "primary" if row["metric"] == "best_fitness" else "secondary"
+        )
+
+    with redirect_stderr(io.StringIO()):
+        assert analyze_main(["--output-dir", str(first_output)]) == 1
+    with redirect_stdout(io.StringIO()):
+        assert analyze_main(["--output-dir", str(first_output), "--overwrite"]) == 0
+
+assert repository_status() == status_before_analysis_tests
+
+print("Analysis tests passed.")
