@@ -131,6 +131,76 @@ with tempfile.TemporaryDirectory() as tmp:
 
 print("Project B preprocessing tests passed.")
 
+# --- autoencoder (protocol Section 5) ------------------------------------
+import torch
+
+from har_autoencoder import (
+    ConvAutoencoder,
+    TrainingConfig,
+    encode,
+    parameter_count,
+    reconstruction_errors,
+    train_autoencoder,
+)
+
+default_config = TrainingConfig()
+assert (default_config.latent_dim, default_config.epochs) == (16, 30)
+assert (default_config.batch_size, default_config.learning_rate) == (128, 1e-3)
+
+model = ConvAutoencoder(16)
+assert parameter_count(model.encoder) == 1472 + 10304 + 32784
+assert parameter_count(model) == 1472 + 10304 + 32784 + 34816 + 8224 + 1161
+with torch.no_grad():
+    probe = torch.zeros(5, 9, 128)
+    assert model.encode(probe).shape == (5, 16)
+    assert model(probe).shape == (5, 9, 128)
+
+# Structured synthetic windows: sinusoids with random phase and amplitude.
+signal_rng = np.random.default_rng(1)
+time_axis = np.linspace(0, 4 * np.pi, 128)
+phase = signal_rng.uniform(0, 2 * np.pi, size=(300, 9, 1))
+amplitude = signal_rng.uniform(0.5, 1.5, size=(300, 9, 1))
+synthetic_raw = amplitude * np.sin(time_axis[None, None, :] + phase)
+
+small = TrainingConfig(epochs=3, batch_size=64)
+model_a, history_a = train_autoencoder(synthetic_raw, seed=7, config=small)
+model_b, history_b = train_autoencoder(synthetic_raw, seed=7, config=small)
+model_c, history_c = train_autoencoder(synthetic_raw, seed=8, config=small)
+
+# Same seed: bit-identical training; different seed: different model.
+assert history_a["epoch_losses"] == history_b["epoch_losses"]
+for p_a, p_b in zip(model_a.parameters(), model_b.parameters()):
+    assert torch.equal(p_a, p_b)
+assert history_a["epoch_losses"] != history_c["epoch_losses"]
+assert len(history_a["epoch_losses"]) == 3
+assert history_a["config"]["epochs"] == 3 and history_a["seed"] == 7
+assert np.isfinite(history_a["final_training_loss"])
+
+# Training lowers the reconstruction error on structured data.
+untrained_error = reconstruction_errors(ConvAutoencoder(16), synthetic_raw).mean()
+assert history_a["final_training_loss"] < untrained_error
+assert history_a["epoch_losses"][-1] < history_a["epoch_losses"][0]
+
+# Encoding and scoring: shapes, no side effects, batch-size independence.
+latent = encode(model_a, synthetic_raw)
+assert latent.shape == (300, 16) and latent.dtype == np.float64
+assert np.allclose(latent, encode(model_a, synthetic_raw, batch_size=7), atol=1e-5)
+errors = reconstruction_errors(model_a, synthetic_raw)
+assert errors.shape == (300,) and np.all(errors >= 0)
+assert np.allclose(errors.mean(), history_a["final_training_loss"])
+assert np.array_equal(latent, encode(model_a, synthetic_raw))
+
+# Invalid input is rejected rather than repaired.
+for bad_input in (synthetic_raw[:, :8, :], np.full((4, 9, 128), np.nan)):
+    try:
+        train_autoencoder(bad_input, seed=0, config=small)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid autoencoder input was accepted")
+
+print("Project B autoencoder tests passed.")
+
 # --- real dataset ----------------------------------------------------------
 if not DEFAULT_ZIP_PATH.is_file():
     print(f"SKIPPED real-data checks: {DEFAULT_ZIP_PATH} not found.")
