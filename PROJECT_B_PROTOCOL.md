@@ -1,10 +1,10 @@
-# Project B Experiment Protocol (Draft)
+# Project B Experiment Protocol, Version 1
 
-**Status: DRAFT, not frozen.** Section 15 lists the decisions that are still
-open. Once they are settled, this protocol is frozen with a Git tag, before any
-model is trained and before any statistic of the data is computed. After
-freezing, the design must not be changed in response to results; a change
-requires a new protocol version and a new experiment.
+**Status: FROZEN on 2026-11-06 as Git tag `project-b-protocol-v1`.** It was
+frozen before any model was trained and before any statistic of the data was
+computed; only the file structure checks in `PROJECT_B_DATA.md` had been run.
+The design must not be changed in response to results; a change requires a
+new protocol version and a new experiment.
 
 ## 1. Purpose and Boundary
 
@@ -61,7 +61,7 @@ training windows without the withheld activity).
 - **AE-L:** encoder output (L values) of the autoencoder in Section 5, applied
   to standardized RAW.
 
-L is the latent dimension, fixed at **16** (open decision D1).
+L is the latent dimension, fixed at **16** (decision D1).
 
 ## 5. Autoencoder (fixed; no tuning)
 
@@ -74,7 +74,7 @@ L is the latent dimension, fixed at **16** (open decision D1).
 
 - Loss: mean squared error on standardized RAW.
 - Optimizer: Adam, learning rate 1e-3, batch size 128, **30 epochs**
-  (open decision D2), shuffling with the run seed.
+  (decision D2), shuffling with the run seed.
 - No early stopping, no validation-based selection, no hyperparameter search.
   The model after the final epoch is used.
 - Determinism: `torch.manual_seed(seed)`, NumPy seeded,
@@ -94,7 +94,7 @@ representation fitted on the training windows. k = 6.
 
 Unlike Project A, K-Means is run with every seed, so it is a paired
 stochastic baseline. BF and CBF are applied to all four representations
-(open decision D3: they may be slow and weak in 561 and 1,152 dimensions).
+(decision D3; they may be slow and weak in 561 and 1,152 dimensions).
 
 ## 7. Anomaly Detection (RQ2)
 
@@ -126,7 +126,7 @@ cost does not depend on the seed) and for PCA-L:
 Latency on this PC is a proxy, not a phone measurement, and is reported as
 environment-dependent. The cost of computing the 561 handcrafted features
 cannot be measured: the provider's feature-extraction code is not in the
-dataset. Quantization is out of scope (open decision D4).
+dataset. Quantization is out of scope (decision D4).
 
 ## 9. Seeds and Run Count
 
@@ -194,9 +194,11 @@ Runtime versions, the exact command, timestamps, and the full configuration.
 - Latency on a PC is not a phone measurement.
 - Negative and inconclusive results are reported.
 
-## 15. Open Decisions Before Freezing
+## 15. Decisions Settled at Freezing
 
-| ID | Decision | Draft choice |
+Accepted by Azam Rahmani on 2026-11-06 as drafted.
+
+| ID | Decision | Choice |
 |---|---|---|
 | D1 | Latent dimension L | 16 |
 | D2 | Training epochs | 30, fixed |
