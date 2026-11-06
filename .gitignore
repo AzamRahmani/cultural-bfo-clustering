@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 original_thesis.pdf
 
+# Project B raw datasets (downloaded; fingerprints in PROJECT_B_DATA.md)
+data/
+
 # Temporary NotebookLM source copies
 bf_iris.txt
 iris_baseline.txt
