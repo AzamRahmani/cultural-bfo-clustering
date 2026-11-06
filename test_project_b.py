@@ -203,6 +203,7 @@ print("Project B autoencoder tests passed.")
 
 # --- run infrastructure and clustering runner (protocol Section 6) --------
 import contextlib
+import csv
 import io
 import json
 
@@ -489,6 +490,114 @@ with torch.no_grad():
 assert np.allclose(projected, pca_check.transform(prepared["test"]["raw_flat"]), atol=1e-4)
 
 print("Project B edge measurement tests passed.")
+
+# --- analysis (PROJECT_B_ANALYSIS_PLAN.md) ---------------------------------
+import analyze_project_b as analysis
+
+
+def fake_clustering_rows():
+    rows = []
+    for representation in analysis.CLUSTERING_REPRESENTATIONS:
+        for algorithm in analysis.CLUSTERING_ALGORITHMS:
+            for seed in range(30):
+                row = {column: None for column in clustering_runner.COLUMNS}
+                base = {"HAND": 30.0, "RAW": 40.0, "PCA16": 35.0, "AE16": 34.0}[representation]
+                row.update(
+                    representation=representation, representation_dim=16, algorithm=algorithm,
+                    seed=seed, run_status="success", failure_description="",
+                    error_rate_percent=base + 0.1 * seed, ari=0.5, nmi=0.6 + 0.001 * seed,
+                    silhouette=0.2, fitness=100.0 + seed, nonempty_cluster_count=6,
+                    clustering_runtime_seconds=1.0, parameter_configuration={},
+                )
+                if algorithm != "KMEANS":
+                    row.update(fitness_evaluation_count=2000, empty_cluster_rejections=3)
+                if representation == "AE16":
+                    row.update(ae_final_training_loss=0.3, ae_training_seconds=30.0)
+                rows.append(row)
+    # One failure: BF on RAW, seed 4.
+    failed = next(r for r in rows if (r["representation"], r["algorithm"], r["seed"]) == ("RAW", "BF", 4))
+    for column in ("error_rate_percent", "ari", "nmi", "silhouette", "fitness"):
+        failed[column] = None
+    failed.update(run_status="failed", failure_description="ValueError: 5 nonempty clusters")
+    return rows
+
+
+def fake_anomaly_rows():
+    rows = []
+    for activity in range(1, 7):
+        for detector in ("AE", "PCA", "IF"):
+            for seed in range(30):
+                row = {column: None for column in anomaly_runner.COLUMNS}
+                value = {"AE": 0.8 + 0.001 * seed, "PCA": 0.7, "IF": 0.6 + 0.002 * seed}[detector]
+                row.update(
+                    withheld_activity=activity, withheld_activity_name="X", detector=detector,
+                    seed=seed, run_status="success", failure_description="", roc_auc=value,
+                    pr_auc=value / 2, positive_count=10, test_count=60, fit_window_count=100,
+                    detector_runtime_seconds=1.0, parameter_configuration={},
+                )
+                rows.append(row)
+    return rows
+
+
+def fake_edge_rows():
+    rows = []
+    for model in ("AE16_ENCODER", "PCA16"):
+        row = {column: None for column in edge_runner.COLUMNS}
+        row.update(model=model, run_status="success", failure_description="", parameter_count=10,
+                   parameter_configuration={})
+        rows.append(row)
+    return rows
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    results_dir = Path(tmp) / "results"
+    full = {"full_protocol_design": True}
+    write_results(fake_clustering_rows(), clustering_runner.COLUMNS, results_dir / "clustering_results.csv", full)
+    write_results(fake_anomaly_rows(), anomaly_runner.COLUMNS, results_dir / "anomaly_results.csv", full)
+    write_results(fake_edge_rows(), edge_runner.COLUMNS, results_dir / "edge_results.csv", full)
+    out_dir = Path(tmp) / "analysis"
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert analysis.main(["--results-dir", str(results_dir), "--output-dir", str(out_dir)]) == 0
+
+    paired_out = list(csv.DictReader(open(out_dir / "paired_tests.csv", encoding="utf-8")))
+    families = [row["family"] for row in paired_out]
+    assert families.count("C") == 5 and families.count("E1") == 6 and families.count("E2") == 6
+    assert families.count("E3") == 14 and families.count("E4") == 12
+    confirmatory = [row for row in paired_out if row["family"] == "C"]
+    assert all(row["role"] == "confirmatory" for row in confirmatory)
+    ae_vs_pca = confirmatory[0]
+    assert (ae_vs_pca["method_a"], ae_vs_pca["method_b"], ae_vs_pca["context"]) == ("AE16", "PCA16", "KMEANS")
+    assert ae_vs_pca["a_lower_count"] == "30" and float(ae_vs_pca["rank_biserial"]) == -1.0
+    assert float(ae_vs_pca["median_difference_a_minus_b"]) == -1.0
+    for row in paired_out:
+        if row["p_value"]:
+            assert float(row["p_holm"]) >= float(row["p_value"])
+    raw_bf = next(r for r in paired_out if r["family"] == "E1" and r["context"] == "BF" and r["method_b"] == "RAW")
+    assert raw_bf["pairs"] == "29" and raw_bf["excluded_seeds"] == "4"
+    auc_all = next(r for r in paired_out if r["family"] == "C" and r["method_b"] == "PCA")
+    assert auc_all["context"] == "ALL" and auc_all["a_higher_count"] == "30"
+
+    clustering_desc = list(csv.DictReader(open(out_dir / "clustering_descriptive.csv", encoding="utf-8")))
+    bf_raw = next(r for r in clustering_desc if (r["context"], r["method"], r["metric"]) == ("RAW", "BF", "error_rate_percent"))
+    assert bf_raw["successful_runs"] == "29" and bf_raw["failed_runs"] == "1"
+    assert not any(r["metric"].startswith("ae_") and r["context"] != "AE16" for r in clustering_desc)
+    anomaly_desc = list(csv.DictReader(open(out_dir / "anomaly_descriptive.csv", encoding="utf-8")))
+    pca_all = next(r for r in anomaly_desc if (r["context"], r["method"], r["metric"]) == ("ALL", "PCA", "roc_auc"))
+    assert float(pca_all["mean"]) == 0.7 and pca_all["successful_runs"] == "30"
+
+    # Existing outputs are protected; a tampered or partial input is refused.
+    with contextlib.redirect_stderr(io.StringIO()):
+        assert analysis.main(["--results-dir", str(results_dir), "--output-dir", str(out_dir)]) == 1
+        clustering_csv = results_dir / "clustering_results.csv"
+        clustering_csv.write_bytes(clustering_csv.read_bytes().replace(b"34.0", b"33.0", 1))
+        assert analysis.main(["--results-dir", str(results_dir), "--output-dir", str(Path(tmp) / "x")]) == 1
+        write_results(fake_clustering_rows()[:-1], clustering_runner.COLUMNS, clustering_csv, full, overwrite=True)
+        assert analysis.main(["--results-dir", str(results_dir), "--output-dir", str(Path(tmp) / "y")]) == 1
+        write_results(fake_clustering_rows(), clustering_runner.COLUMNS, clustering_csv,
+                      {"full_protocol_design": False}, overwrite=True)
+        assert analysis.main(["--results-dir", str(results_dir), "--output-dir", str(Path(tmp) / "z")]) == 1
+
+print("Project B analysis tests passed.")
 
 # --- real dataset ----------------------------------------------------------
 if not DEFAULT_ZIP_PATH.is_file():
