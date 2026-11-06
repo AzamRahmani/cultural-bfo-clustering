@@ -452,6 +452,44 @@ with tempfile.TemporaryDirectory() as tmp:
 
 print("Project B anomaly runner tests passed.")
 
+# --- edge measurements (protocol Section 8) ------------------------------
+import logging
+import warnings
+
+from sklearn.decomposition import PCA
+
+import run_project_b_edge as edge_runner
+
+logging.getLogger("torch.onnx").setLevel(logging.ERROR)
+with tempfile.TemporaryDirectory() as tmp, warnings.catch_warnings(), \
+        contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+    warnings.simplefilter("ignore")
+    edge_rows = edge_runner.run_experiment(cluster_splits, tiny_config, Path(tmp) / "models", log=quiet)
+    model_files = sorted(p.name for p in (Path(tmp) / "models").iterdir())
+
+assert [r["model"] for r in edge_rows] == ["AE16_ENCODER", "PCA16"]
+for row in edge_rows:
+    assert set(row) == set(edge_runner.COLUMNS)
+    assert row["run_status"] == "success", row["failure_description"]
+    assert row["float32_weight_bytes"] == 4 * row["parameter_count"]
+    assert row["onnx_file_bytes"] > 0 and len(row["onnx_sha256"]) == 64
+    assert row["onnx_max_abs_difference"] <= 1e-4
+    assert 0 < row["latency_median_ms"] <= row["latency_p95_ms"]
+    assert (row["warmup_runs"], row["timed_runs"], row["intra_op_threads"]) == (100, 1000, 1)
+assert edge_rows[0]["parameter_count"] == 1472 + 10304 + 32784
+assert edge_rows[0]["training_seed"] == 0 and edge_rows[1]["training_seed"] is None
+assert edge_rows[1]["parameter_count"] == 1152 * 16 + 16
+assert model_files == ["ae16_encoder.onnx", "pca16.onnx"]
+
+# The PCA layer reproduces scikit-learn's projection exactly enough.
+pca_check = PCA(n_components=16, svd_solver="full").fit(prepared["fit"]["raw_flat"])
+projection = edge_runner.PcaProjection(pca_check).eval()
+with torch.no_grad():
+    projected = projection(torch.from_numpy(prepared["test"]["raw"].astype(np.float32))).numpy()
+assert np.allclose(projected, pca_check.transform(prepared["test"]["raw_flat"]), atol=1e-4)
+
+print("Project B edge measurement tests passed.")
+
 # --- real dataset ----------------------------------------------------------
 if not DEFAULT_ZIP_PATH.is_file():
     print(f"SKIPPED real-data checks: {DEFAULT_ZIP_PATH} not found.")
