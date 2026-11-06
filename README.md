@@ -16,6 +16,18 @@ The predefined prototype experiment ran once: 4 datasets (Iris, Wine, Glass, Can
 
 In short: the BF–CBF difference depends on the dataset and the metric, CBF used more fitness evaluations, and no general superiority of either method is established.
 
+## Project B (in progress)
+
+Learned sensor representations, anomaly detection, and edge feasibility on UCI HAR. Project A files and results are not modified.
+
+- `PROJECT_B_PROTOCOL.md`: protocol version 1, frozen as tag `project-b-protocol-v1` before any training
+- `PROJECT_B_DATA.md`: dataset source, license, fingerprints, and structural check
+- `har_data.py`: fingerprint-checked loader for the provider's subject-wise split
+- `har_preprocessing.py`: standardization fitted on training windows only
+- `test_project_b.py`: tests, including leakage checks (`python test_project_b.py`)
+
+The raw data is not in Git; download it to `data/raw/uci_har_240.zip` as described in `PROJECT_B_DATA.md`.
+
 ## Current Implementation
 
 - K-Means baselines for Iris, Wine, Glass, and Cancer
