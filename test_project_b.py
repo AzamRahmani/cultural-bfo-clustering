@@ -201,6 +201,257 @@ for bad_input in (synthetic_raw[:, :8, :], np.full((4, 9, 128), np.nan)):
 
 print("Project B autoencoder tests passed.")
 
+# --- run infrastructure and clustering runner (protocol Section 6) --------
+import contextlib
+import io
+import json
+
+import project_b_runs
+import run_project_b_clustering as clustering_runner
+from project_b_runs import metadata_path_for, read_results, write_results
+
+
+def structured_split(rng, per_class, subjects):
+    """Six separable activity groups in both HAND and RAW form."""
+    y = np.repeat(np.arange(1, 7), per_class)
+    centers_hand = rng.normal(0, 6.0, size=(6, 561))
+    hand = centers_hand[y - 1] + rng.normal(0, 1.0, size=(len(y), 561))
+    t = np.linspace(0, 4 * np.pi, 128)
+    raw = (
+        np.sin(t[None, None, :] * y[:, None, None] / 2.0 + np.arange(9)[None, :, None])
+        + rng.normal(0, 0.1, size=(len(y), 9, 128))
+    )
+    return HarSplit(hand=hand, raw=raw, y=y, subject=np.resize(np.array(subjects), len(y)))
+
+
+cluster_rng = np.random.default_rng(3)
+cluster_splits = {
+    "train": structured_split(cluster_rng, 20, range(1, 22)),
+    "test": structured_split(cluster_rng, 10, range(22, 31)),
+}
+tiny_config = TrainingConfig(epochs=1, batch_size=32)
+quiet = lambda message: None  # noqa: E731
+
+rows_first = clustering_runner.run_experiment(
+    cluster_splits, (0, 1), clustering_runner.REPRESENTATIONS,
+    clustering_runner.ALGORITHMS, tiny_config, log=quiet,
+)
+assert len(rows_first) == 2 * 4 * 3
+keys = {(r["seed"], r["representation"], r["algorithm"]) for r in rows_first}
+assert len(keys) == len(rows_first)
+for row in rows_first:
+    assert set(row) == set(clustering_runner.COLUMNS)
+    expected_dim = {"HAND": 561, "RAW": 1152, "PCA16": 16, "AE16": 16}[row["representation"]]
+    assert row["representation_dim"] == expected_dim
+    if row["representation"] == "AE16":
+        assert row["ae_final_training_loss"] is not None
+    else:
+        assert row["ae_final_training_loss"] is None
+    if row["run_status"] == "success":
+        assert row["nonempty_cluster_count"] == 6
+        assert 0 <= row["error_rate_percent"] <= 100
+        assert row["correct_count"] + row["incorrect_count"] == 60
+        assert -1 <= row["silhouette"] <= 1
+        if row["algorithm"] == "KMEANS":
+            assert row["fitness_evaluation_count"] is None
+        else:
+            assert row["fitness_evaluation_count"] > 0
+    else:
+        assert row["failure_description"]
+assert all(r["run_status"] == "success" for r in rows_first if r["algorithm"] == "KMEANS")
+
+# Deterministic apart from runtimes.
+rows_second = clustering_runner.run_experiment(
+    cluster_splits, (1,), clustering_runner.REPRESENTATIONS,
+    clustering_runner.ALGORITHMS, tiny_config, log=quiet,
+)
+timing_columns = {"clustering_runtime_seconds", "ae_training_seconds"}
+assert len(rows_second) == 12
+for first, second in zip(rows_first[12:], rows_second):
+    for column in clustering_runner.COLUMNS:
+        if column not in timing_columns:
+            assert first[column] == second[column], column
+
+# Test labels are used only for evaluation: shuffling them leaves the
+# label-free quantities unchanged.
+shuffled_test = HarSplit(
+    hand=cluster_splits["test"].hand,
+    raw=cluster_splits["test"].raw,
+    y=np.random.default_rng(9).permutation(cluster_splits["test"].y),
+    subject=cluster_splits["test"].subject,
+)
+rows_shuffled = clustering_runner.run_experiment(
+    {"train": cluster_splits["train"], "test": shuffled_test}, (0,),
+    ("PCA16", "AE16"), ("KMEANS",), tiny_config, log=quiet,
+)
+for shuffled in rows_shuffled:
+    original = next(
+        r for r in rows_first
+        if (r["seed"], r["representation"], r["algorithm"])
+        == (0, shuffled["representation"], "KMEANS")
+    )
+    assert shuffled["fitness"] == original["fitness"]
+    assert shuffled["silhouette"] == original["silhouette"]
+
+# An autoencoder failure is recorded for every AE row, not skipped.
+original_train = clustering_runner.train_autoencoder
+
+
+def failing_training(*args, **kwargs):
+    raise RuntimeError("simulated failure")
+
+
+clustering_runner.train_autoencoder = failing_training
+try:
+    failed_rows = clustering_runner.run_experiment(
+        cluster_splits, (0,), ("PCA16", "AE16"), ("KMEANS", "BF"), tiny_config, log=quiet,
+    )
+finally:
+    clustering_runner.train_autoencoder = original_train
+ae_rows = [r for r in failed_rows if r["representation"] == "AE16"]
+assert len(failed_rows) == 4 and len(ae_rows) == 2
+assert all(r["run_status"] == "failed" and "simulated failure" in r["failure_description"] for r in ae_rows)
+assert all(r["error_rate_percent"] is None for r in ae_rows)
+
+# CSV writing, fingerprint sidecar, and tamper detection.
+with tempfile.TemporaryDirectory() as tmp:
+    out = Path(tmp) / "clustering.csv"
+    summary = write_results(rows_first, clustering_runner.COLUMNS, out, {"note": "test"})
+    assert summary["row_count"] == 24
+    back = read_results(out)
+    assert len(back) == 24 and tuple(back[0]) == clustering_runner.COLUMNS
+    assert float(back[0]["error_rate_percent"]) == rows_first[0]["error_rate_percent"]
+    assert back[0]["ae_final_training_loss"] == ""
+    try:
+        write_results(rows_first, clustering_runner.COLUMNS, out, {})
+    except FileExistsError:
+        pass
+    else:
+        raise AssertionError("existing results were overwritten")
+    out.write_bytes(out.read_bytes() + b"\n")
+    try:
+        read_results(out)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a modified results file was accepted")
+    bad_row = dict(rows_first[0], silhouette=float("nan"))
+    try:
+        write_results([bad_row], clustering_runner.COLUMNS, Path(tmp) / "nan.csv", {})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a non-finite value was written")
+
+    # Command line: partial designs cannot use the protocol output path.
+    with contextlib.redirect_stderr(io.StringIO()):
+        try:
+            clustering_runner.parse_arguments(["--seeds", "0"])
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("a partial design was allowed on the protocol path")
+
+    cli_out = Path(tmp) / "cli.csv"
+    with contextlib.redirect_stdout(io.StringIO()):
+        code = clustering_runner.main(
+            ["--output", str(cli_out), "--seeds", "0", "--representations", "PCA16",
+             "--algorithms", "KMEANS", "--ae-epochs", "1", "--allow-dirty-tree"],
+            splits=cluster_splits,
+        )
+    assert code == 0
+    metadata = json.loads(metadata_path_for(cli_out).read_text(encoding="utf-8"))
+    assert metadata["full_protocol_design"] is False
+    assert metadata["protocol_tag"] == project_b_runs.PROTOCOL_TAG
+    assert metadata["row_count"] == 1 and metadata["torch_version"]
+    assert len(read_results(cli_out)) == 1
+
+print("Project B clustering runner tests passed.")
+
+# --- anomaly runner (protocol Section 7) ---------------------------------
+import run_project_b_anomaly as anomaly_runner
+
+anomaly_rows = anomaly_runner.run_experiment(
+    cluster_splits, (0, 1), (2, 5), anomaly_runner.DETECTORS, tiny_config, log=quiet,
+)
+assert len(anomaly_rows) == 2 * 2 * 3
+for row in anomaly_rows:
+    assert set(row) == set(anomaly_runner.COLUMNS)
+    assert row["run_status"] == "success", row["failure_description"]
+    assert 0 <= row["roc_auc"] <= 1 and 0 <= row["pr_auc"] <= 1
+    assert row["positive_count"] == 10 and row["test_count"] == 60
+    assert row["fit_window_count"] == 100  # 120 training windows minus 20 withheld
+    assert (row["ae_final_training_loss"] is None) == (row["detector"] != "AE")
+
+# PCA is deterministic: identical for every seed of one withheld activity.
+pca_values = {
+    (r["withheld_activity"], r["seed"]): r["roc_auc"] for r in anomaly_rows if r["detector"] == "PCA"
+}
+assert pca_values[(2, 0)] == pca_values[(2, 1)]
+assert pca_values[(5, 0)] == pca_values[(5, 1)]
+
+# Seeded detectors are reproducible.
+repeat_rows = anomaly_runner.run_experiment(
+    cluster_splits, (1,), (2,), ("AE", "IF"), tiny_config, log=quiet,
+)
+for repeated in repeat_rows:
+    original = next(
+        r for r in anomaly_rows
+        if (r["withheld_activity"], r["seed"], r["detector"]) == (2, 1, repeated["detector"])
+    )
+    assert repeated["roc_auc"] == original["roc_auc"]
+    assert repeated["pr_auc"] == original["pr_auc"]
+
+# Scores are computed without test labels: relabelling the test windows
+# changes only which windows count as positive.
+relabelled_test = HarSplit(
+    hand=cluster_splits["test"].hand,
+    raw=cluster_splits["test"].raw,
+    y=np.where(cluster_splits["test"].y == 2, 4, np.where(cluster_splits["test"].y == 4, 2, cluster_splits["test"].y)),
+    subject=cluster_splits["test"].subject,
+)
+direct = anomaly_runner.pca_scores(
+    prepare_standardized(cluster_splits, withheld_activity=2)["fit"]["raw_flat"],
+    prepare_standardized(cluster_splits, withheld_activity=2)["test"]["raw_flat"],
+)
+relabelled_direct = anomaly_runner.pca_scores(
+    prepare_standardized({"train": cluster_splits["train"], "test": relabelled_test}, withheld_activity=2)["fit"]["raw_flat"],
+    prepare_standardized({"train": cluster_splits["train"], "test": relabelled_test}, withheld_activity=2)["test"]["raw_flat"],
+)
+assert np.array_equal(direct, relabelled_direct)
+
+# A perfect score separates positives completely; a failure is recorded.
+perfect = anomaly_runner.score_row({}, 3, np.where(cluster_splits["test"].y == 3, 10.0, 0.0), cluster_splits["test"].y)
+assert perfect["roc_auc"] == 1.0 and perfect["pr_auc"] == 1.0
+try:
+    anomaly_runner.score_row({}, 3, np.full(60, np.nan), cluster_splits["test"].y)
+except ValueError:
+    pass
+else:
+    raise AssertionError("non-finite anomaly scores were accepted")
+
+with tempfile.TemporaryDirectory() as tmp:
+    with contextlib.redirect_stderr(io.StringIO()):
+        try:
+            anomaly_runner.parse_arguments(["--activities", "1"])
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("a partial design was allowed on the protocol path")
+    cli_out = Path(tmp) / "anomaly.csv"
+    with contextlib.redirect_stdout(io.StringIO()):
+        code = anomaly_runner.main(
+            ["--output", str(cli_out), "--seeds", "0", "--activities", "6",
+             "--detectors", "PCA", "IF", "--allow-dirty-tree"],
+            splits=cluster_splits,
+        )
+    assert code == 0
+    cli_rows = read_results(cli_out)
+    assert [r["detector"] for r in cli_rows] == ["PCA", "IF"]
+    assert all(r["withheld_activity_name"] == "LAYING" for r in cli_rows)
+
+print("Project B anomaly runner tests passed.")
+
 # --- real dataset ----------------------------------------------------------
 if not DEFAULT_ZIP_PATH.is_file():
     print(f"SKIPPED real-data checks: {DEFAULT_ZIP_PATH} not found.")

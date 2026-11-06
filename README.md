@@ -25,6 +25,9 @@ Learned sensor representations, anomaly detection, and edge feasibility on UCI H
 - `har_data.py`: fingerprint-checked loader for the provider's subject-wise split
 - `har_preprocessing.py`: standardization fitted on training windows only
 - `har_autoencoder.py`: the fixed convolutional autoencoder and deterministic CPU training
+- `project_b_runs.py`: shared run checks, metadata, and fingerprinted CSV output
+- `run_project_b_clustering.py`: RQ1/RQ4 clustering experiment (`results/project_b/clustering_results.csv`)
+- `run_project_b_anomaly.py`: RQ2 leave-one-activity-out anomaly experiment (`results/project_b/anomaly_results.csv`)
 - `test_project_b.py`: tests, including leakage checks (`python test_project_b.py`)
 
 The raw data is not in Git; download it to `data/raw/uci_har_240.zip` as described in `PROJECT_B_DATA.md`.
