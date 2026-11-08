@@ -26,7 +26,10 @@ from clustering_metrics import within_cluster_sum_squared_distance
 from har_autoencoder import TrainingConfig, encode, train_autoencoder
 from har_preprocessing import prepare_standardized
 from project_b_runs import (
+    Checkpoint,
+    CheckpointMismatch,
     NUM_CLUSTERS,
+    checkpoint_path_for,
     RESULTS_DIR,
     SEEDS,
     check_run_preconditions,
@@ -173,13 +176,20 @@ def static_representations(prepared):
     }
 
 
-def run_experiment(splits, seeds, representations, algorithms, ae_config, log=print):
+def run_experiment(splits, seeds, representations, algorithms, ae_config, log=print, checkpoint=None):
     prepared = prepare_standardized(splits)
     y_test = prepared["test"]["y"]
     static = static_representations(prepared)
     rows = []
 
     for seed in seeds:
+        if checkpoint is not None:
+            resumed = checkpoint.completed((seed,))
+            if resumed is not None:
+                rows.extend(resumed)
+                log(f"RESUMED seed={seed} ({len(resumed)} rows from checkpoint)")
+                continue
+        seed_start = len(rows)
         test_representations = {name: static[name] for name in static if name in representations}
         ae_history, ae_error = None, None
         if "AE16" in representations:
@@ -211,6 +221,8 @@ def run_experiment(splits, seeds, representations, algorithms, ae_config, log=pr
                 status = "SUCCESS" if row["run_status"] == "success" else "FAILED"
                 detail = "" if status == "SUCCESS" else f": {row['failure_description']}"
                 log(f"{status} seed={seed} representation={representation} algorithm={algorithm}{detail}")
+        if checkpoint is not None:
+            checkpoint.record((seed,), rows[seed_start:])
     return rows
 
 
@@ -256,11 +268,28 @@ def main(argv=None, splits=None):
     ae_config = TrainingConfig(epochs=arguments.ae_epochs)
     metadata = environment_metadata()
     started = utc_timestamp()
+    header = {
+        "experiment": "clustering",
+        "git_commit": metadata["git_commit"],
+        "git_tree_clean": tree_clean,
+        "seeds": list(arguments.seeds),
+        "representations": list(arguments.representations),
+        "algorithms": list(arguments.algorithms),
+        "autoencoder_config": ae_config.as_dict(),
+    }
+    try:
+        checkpoint = Checkpoint(checkpoint_path_for(arguments.output), header)
+    except CheckpointMismatch as error:
+        print(f"ERROR: {error}; delete it only if its runs are not needed.", file=sys.stderr)
+        return 1
+    resumed_units = sorted(unit[0] for unit in checkpoint.units)
     rows = run_experiment(
         splits, arguments.seeds, arguments.representations, arguments.algorithms,
-        ae_config, log=lambda message: print(message, flush=True),
+        ae_config, log=lambda message: print(message, flush=True), checkpoint=checkpoint,
     )
     metadata.update(
+        sessions_started_at_utc=checkpoint.sessions,
+        seeds_resumed_from_checkpoint=resumed_units,
         experiment="clustering",
         full_protocol_design=arguments.full_design,
         git_tree_clean=tree_clean,
@@ -274,6 +303,7 @@ def main(argv=None, splits=None):
         algorithms=list(arguments.algorithms),
     )
     summary = write_results(rows, COLUMNS, arguments.output, metadata, arguments.overwrite)
+    checkpoint.remove()
     print(f"Wrote {summary['row_count']} rows ({summary['failed_row_count']} failed) to {arguments.output}.")
     return 0
 

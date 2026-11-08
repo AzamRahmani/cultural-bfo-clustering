@@ -188,3 +188,78 @@ def check_run_preconditions(allow_dirty_tree):
 
 def run_command(script_name, argv):
     return [sys.executable, script_name, *argv]
+
+
+class CheckpointMismatch(RuntimeError):
+    """The checkpoint belongs to a different configuration or code state."""
+
+
+class Checkpoint:
+    """Append-only record of completed units, so an interrupted run resumes.
+
+    The first line is a header with the run configuration and Git commit; a
+    checkpoint from any other configuration or commit is refused. Each later
+    line is either a session start or one completed unit with its rows. Units
+    are only recorded when complete, so a unit interrupted mid-way is rerun.
+    Because every unit is seeded independently, a resumed run produces the
+    same values as an uninterrupted one.
+    """
+
+    def __init__(self, path, header):
+        self.path = Path(path)
+        self.header = json.loads(json.dumps(header, sort_keys=True))
+        self.units = {}
+        self.sessions = []
+        if self.path.exists():
+            with self.path.open("r", encoding="utf-8") as handle:
+                lines = [line for line in handle.read().splitlines() if line.strip()]
+            complete = []
+            for index, line in enumerate(lines):
+                try:
+                    complete.append(json.loads(line))
+                except json.JSONDecodeError:
+                    if index != len(lines) - 1:
+                        raise
+                    # A line cut off by the interruption: that unit is rerun.
+            if not complete or complete[0].get("header") != self.header:
+                raise CheckpointMismatch(
+                    f"{self.path} belongs to a different configuration or commit"
+                )
+            for entry in complete[1:]:
+                if "session_started_at_utc" in entry:
+                    self.sessions.append(entry["session_started_at_utc"])
+                else:
+                    self.units[tuple(entry["unit"])] = entry["rows"]
+            with self.path.open("w", encoding="utf-8", newline="\n") as handle:
+                for entry in complete:
+                    handle.write(json.dumps(entry, sort_keys=True) + "\n")
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._append({"header": self.header})
+        started = utc_timestamp()
+        self.sessions.append(started)
+        self._append({"session_started_at_utc": started})
+
+    def _append(self, entry):
+        with self.path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(entry, sort_keys=True, allow_nan=False) + "\n")
+            handle.flush()
+            import os
+
+            os.fsync(handle.fileno())
+
+    def completed(self, unit):
+        rows = self.units.get(tuple(unit))
+        return None if rows is None else [dict(row) for row in rows]
+
+    def record(self, unit, rows):
+        self._append({"unit": list(unit), "rows": rows})
+        self.units[tuple(unit)] = rows
+
+    def remove(self):
+        self.path.unlink(missing_ok=True)
+
+
+def checkpoint_path_for(output_path):
+    output_path = Path(output_path)
+    return output_path.with_name(output_path.stem + ".checkpoint.jsonl")

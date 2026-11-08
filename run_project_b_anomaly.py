@@ -19,7 +19,10 @@ from har_autoencoder import TrainingConfig, reconstruction_errors, train_autoenc
 from har_data import ACTIVITY_NAMES
 from har_preprocessing import prepare_standardized
 from project_b_runs import (
+    Checkpoint,
+    CheckpointMismatch,
     RESULTS_DIR,
+    checkpoint_path_for,
     SEEDS,
     check_run_preconditions,
     describe_failure,
@@ -103,9 +106,16 @@ def score_row(row, activity, scores, y_test):
     return row
 
 
-def run_experiment(splits, seeds, activities, detectors, ae_config, log=print):
+def run_experiment(splits, seeds, activities, detectors, ae_config, log=print, checkpoint=None):
     rows = []
     for activity in activities:
+        if checkpoint is not None and all(
+            checkpoint.completed((activity, seed)) is not None for seed in seeds
+        ):
+            for seed in seeds:
+                rows.extend(checkpoint.completed((activity, seed)))
+            log(f"RESUMED withheld={activity} (all seeds from checkpoint)")
+            continue
         prepared = prepare_standardized(splits, withheld_activity=activity)
         fit, test = prepared["fit"], prepared["test"]
         if np.any(fit["y"] == activity):
@@ -121,6 +131,13 @@ def run_experiment(splits, seeds, activities, detectors, ae_config, log=print):
             pca_seconds = time.perf_counter() - start
 
         for seed in seeds:
+            if checkpoint is not None:
+                resumed = checkpoint.completed((activity, seed))
+                if resumed is not None:
+                    rows.extend(resumed)
+                    log(f"RESUMED withheld={activity} seed={seed}")
+                    continue
+            unit_start = len(rows)
             for detector in detectors:
                 row = empty_row(activity, detector, seed, prepared)
                 try:
@@ -151,6 +168,8 @@ def run_experiment(splits, seeds, activities, detectors, ae_config, log=print):
                 status = "SUCCESS" if row["run_status"] == "success" else "FAILED"
                 detail = "" if status == "SUCCESS" else f": {row['failure_description']}"
                 log(f"{status} withheld={activity} seed={seed} detector={detector}{detail}")
+            if checkpoint is not None:
+                checkpoint.record((activity, seed), rows[unit_start:])
     return rows
 
 
@@ -196,11 +215,28 @@ def main(argv=None, splits=None):
     ae_config = TrainingConfig(epochs=arguments.ae_epochs)
     metadata = environment_metadata()
     started = utc_timestamp()
+    header = {
+        "experiment": "anomaly",
+        "git_commit": metadata["git_commit"],
+        "git_tree_clean": tree_clean,
+        "seeds": list(arguments.seeds),
+        "activities": list(arguments.activities),
+        "detectors": list(arguments.detectors),
+        "autoencoder_config": ae_config.as_dict(),
+    }
+    try:
+        checkpoint = Checkpoint(checkpoint_path_for(arguments.output), header)
+    except CheckpointMismatch as error:
+        print(f"ERROR: {error}; delete it only if its runs are not needed.", file=sys.stderr)
+        return 1
+    resumed_units = sorted(list(unit) for unit in checkpoint.units)
     rows = run_experiment(
         splits, arguments.seeds, arguments.activities, arguments.detectors,
-        ae_config, log=lambda message: print(message, flush=True),
+        ae_config, log=lambda message: print(message, flush=True), checkpoint=checkpoint,
     )
     metadata.update(
+        sessions_started_at_utc=checkpoint.sessions,
+        units_resumed_from_checkpoint=resumed_units,
         experiment="anomaly",
         full_protocol_design=arguments.full_design,
         git_tree_clean=tree_clean,
@@ -214,6 +250,7 @@ def main(argv=None, splits=None):
         detectors=list(arguments.detectors),
     )
     summary = write_results(rows, COLUMNS, arguments.output, metadata, arguments.overwrite)
+    checkpoint.remove()
     print(f"Wrote {summary['row_count']} rows ({summary['failed_row_count']} failed) to {arguments.output}.")
     return 0
 

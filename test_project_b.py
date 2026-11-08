@@ -367,6 +367,67 @@ with tempfile.TemporaryDirectory() as tmp:
     assert metadata["row_count"] == 1 and metadata["torch_version"]
     assert len(read_results(cli_out)) == 1
 
+    assert not project_b_runs.checkpoint_path_for(cli_out).exists()
+
+# --- checkpoint and resume ---------------------------------------------------
+from project_b_runs import Checkpoint, CheckpointMismatch
+
+
+class SimulatedInterruption(Exception):
+    pass
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    path = Path(tmp) / "unit.checkpoint.jsonl"
+    header = {"experiment": "x", "seeds": [0, 1]}
+    first = Checkpoint(path, header)
+    first.record((0,), [{"value": 0.1 + 0.2, "count": 3, "missing": None, "config": {"a": 1}}])
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write('{"unit": [1], "rows": [{"value"')  # cut off by an interruption
+    second = Checkpoint(path, header)
+    assert second.completed((0,)) == [{"value": 0.1 + 0.2, "count": 3, "missing": None, "config": {"a": 1}}]
+    assert second.completed((1,)) is None
+    assert len(second.sessions) == 2
+    try:
+        Checkpoint(path, {"experiment": "x", "seeds": [0, 1, 2]})
+    except CheckpointMismatch:
+        pass
+    else:
+        raise AssertionError("a checkpoint from another configuration was accepted")
+    second.remove()
+    assert not path.exists()
+
+    # An interrupted clustering run resumes to the same values as an
+    # uninterrupted one (rows_first above).
+    path = Path(tmp) / "clustering.checkpoint.jsonl"
+    header = {"experiment": "clustering-test"}
+
+    def interrupt_at_seed_1(message):
+        if "seed=1" in message:
+            raise SimulatedInterruption
+
+    try:
+        clustering_runner.run_experiment(
+            cluster_splits, (0, 1), clustering_runner.REPRESENTATIONS, clustering_runner.ALGORITHMS,
+            tiny_config, log=interrupt_at_seed_1, checkpoint=Checkpoint(path, header),
+        )
+    except SimulatedInterruption:
+        pass
+    else:
+        raise AssertionError("the simulated interruption did not happen")
+    resumed_log = []
+    resumed_rows = clustering_runner.run_experiment(
+        cluster_splits, (0, 1), clustering_runner.REPRESENTATIONS, clustering_runner.ALGORITHMS,
+        tiny_config, log=resumed_log.append, checkpoint=Checkpoint(path, header),
+    )
+    assert resumed_log[0].startswith("RESUMED seed=0")
+    assert not any(line.startswith("RESUMED seed=1") for line in resumed_log)
+    assert len(resumed_rows) == len(rows_first)
+    for resumed, original in zip(resumed_rows, rows_first):
+        for column in clustering_runner.COLUMNS:
+            if column not in timing_columns:
+                assert resumed[column] == original[column], column
+
 print("Project B clustering runner tests passed.")
 
 # --- anomaly runner (protocol Section 7) ---------------------------------
@@ -450,6 +511,33 @@ with tempfile.TemporaryDirectory() as tmp:
     cli_rows = read_results(cli_out)
     assert [r["detector"] for r in cli_rows] == ["PCA", "IF"]
     assert all(r["withheld_activity_name"] == "LAYING" for r in cli_rows)
+    assert not project_b_runs.checkpoint_path_for(cli_out).exists()
+
+    # Interrupted anomaly run resumes per (activity, seed) unit.
+    path = Path(tmp) / "anomaly.checkpoint.jsonl"
+
+    def interrupt_at_activity_5(message):
+        if "withheld=5 seed=1" in message:
+            raise SimulatedInterruption
+
+    try:
+        anomaly_runner.run_experiment(
+            cluster_splits, (0, 1), (2, 5), anomaly_runner.DETECTORS, tiny_config,
+            log=interrupt_at_activity_5, checkpoint=Checkpoint(path, {"experiment": "anomaly-test"}),
+        )
+    except SimulatedInterruption:
+        pass
+    resumed_log = []
+    resumed_anomaly = anomaly_runner.run_experiment(
+        cluster_splits, (0, 1), (2, 5), anomaly_runner.DETECTORS, tiny_config,
+        log=resumed_log.append, checkpoint=Checkpoint(path, {"experiment": "anomaly-test"}),
+    )
+    assert resumed_log[0] == "RESUMED withheld=2 (all seeds from checkpoint)"
+    assert "RESUMED withheld=5 seed=0" in resumed_log
+    for resumed, original in zip(resumed_anomaly, anomaly_rows):
+        for column in ("withheld_activity", "detector", "seed", "run_status", "roc_auc", "pr_auc"):
+            assert resumed[column] == original[column], column
+    assert len(resumed_anomaly) == len(anomaly_rows)
 
 print("Project B anomaly runner tests passed.")
 
@@ -492,6 +580,8 @@ assert np.allclose(projected, pca_check.transform(prepared["test"]["raw_flat"]),
 print("Project B edge measurement tests passed.")
 
 # --- analysis (PROJECT_B_ANALYSIS_PLAN.md) ---------------------------------
+import math
+
 import analyze_project_b as analysis
 
 
@@ -583,7 +673,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert not any(r["metric"].startswith("ae_") and r["context"] != "AE16" for r in clustering_desc)
     anomaly_desc = list(csv.DictReader(open(out_dir / "anomaly_descriptive.csv", encoding="utf-8")))
     pca_all = next(r for r in anomaly_desc if (r["context"], r["method"], r["metric"]) == ("ALL", "PCA", "roc_auc"))
-    assert float(pca_all["mean"]) == 0.7 and pca_all["successful_runs"] == "30"
+    assert math.isclose(float(pca_all["mean"]), 0.7) and pca_all["successful_runs"] == "30"
 
     # Existing outputs are protected; a tampered or partial input is refused.
     with contextlib.redirect_stderr(io.StringIO()):
